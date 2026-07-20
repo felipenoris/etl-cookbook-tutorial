@@ -59,7 +59,11 @@ uv run data/generate_data.py --clean --generate   # regenera do zero
    limpeza, groupby, joins, pivot), comparando a API de alto nível do pandas
    com a API nativa do Arrow.
 3. [`DuckDB/`](DuckDB) — os mesmos joins/agregações em SQL, mais o exemplo de
-   `memory_limit`/spill em disco.
+   `memory_limit`/spill em disco e um bloco de funcionalidades de ETL:
+   `COPY TO` particionado com recarga idempotente, staging persistente com
+   UPSERT, ingestão de CSV com quarentena de rejeitadas, SQL avançado
+   (recursiva, `PIVOT`, `ASOF JOIN`), macros/UDFs Python e
+   `EXPORT`/`IMPORT DATABASE`.
 4. [`rust-extension/`](rust-extension) — fecha o ciclo: um ETL real que usa
    DuckDB (extract+join+spill) → pyarrow (projeção) → Rust via `pyo3-arrow`
    (transformação com estado, zero-copy) → pandas (resumo) → grava em

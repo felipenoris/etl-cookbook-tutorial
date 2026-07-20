@@ -6,6 +6,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RAW_DIR = REPO_ROOT / "data" / "raw"
+RICH_DIR = REPO_ROOT / "data" / "rich"
 
 ORDERS_GLOB = str(RAW_DIR / "orders" / "**" / "*.parquet")
 CUSTOMERS_GLOB = str(RAW_DIR / "customers" / "**" / "*.parquet")
