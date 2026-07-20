@@ -22,10 +22,30 @@ uv sync
 | `05_joins.py` | `Table.join` (inner/left outer), join encadeado de 3 tabelas |
 | `06_building_tables_from_functions.py` | `pa.table`, `RecordBatch` manual, UDF Python + `pa.array`, `from_pylist`/`from_batches` |
 | `07_sorting_and_pivot_like.py` | `sort_by`, `pc.rank`, "pivot" manual via `group_by` + reshape |
+| `08_pandas_interop.py` | Table -> DataFrame (`types_mapper=pd.ArrowDtype`, zero-copy provado por endereço de buffer) e DataFrame -> Table (`from_pandas`, `preserve_index`), roundtrip fiel |
+| `09_hybrid_pandas_etl.py` | padrão híbrido: `to_batches` (streaming), lógica de negócio em pandas puro, `ParquetWriter` incremental, `delete_matching` (recarga idempotente) |
 
 ```bash
 uv run examples/01_reading_partitioned_datasets.py
 ```
+
+## Estratégia para equipes proficientes em pandas
+
+O interop pyarrow <-> pandas com backend Arrow é **zero-copy nos dois
+sentidos** — um DataFrame `ArrowDtype` e uma `Table` compartilham os mesmos
+buffers (o exemplo 08 prova comparando endereços de memória). Isso viabiliza
+o desenho do exemplo 09, recomendado quando a equipe domina pandas:
+
+- **pyarrow nas bordas**: leitura de datasets particionados (pruning),
+  streaming em lotes (`to_batches`) e escrita parquet (incremental ou
+  particionada idempotente);
+- **pandas no miolo**: a lógica de negócio em API que a equipe já domina,
+  recebendo cada lote como DataFrame sem custo de conversão.
+
+A equipe não precisa migrar para `pyarrow.compute` — precisa apenas das
+conversões (`to_pandas(types_mapper=pd.ArrowDtype)` / `Table.from_pandas`) e
+de manter o backend Arrow ponta a ponta (sem ele, cada conversão copia os
+dados e degrada tipos — int com nulo vira float64, string vira object).
 
 ## Nota sobre tipos inferidos em partições Hive
 

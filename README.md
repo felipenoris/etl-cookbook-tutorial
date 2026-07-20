@@ -57,7 +57,9 @@ uv run data/generate_data.py --clean --generate   # regenera do zero
    repositório, já que os parquet não são versionados.
 2. [`pandas/`](pandas) e [`pyarrow/`](pyarrow) — mesmos conceitos (seleção,
    limpeza, groupby, joins, pivot), comparando a API de alto nível do pandas
-   com a API nativa do Arrow.
+   com a API nativa do Arrow — mais o interop zero-copy entre as duas e o
+   padrão híbrido (pyarrow nas bordas, pandas no miolo) para equipes
+   proficientes em pandas.
 3. [`DuckDB/`](DuckDB) — os mesmos joins/agregações em SQL, mais o exemplo de
    `memory_limit`/spill em disco e um bloco de funcionalidades de ETL:
    `COPY TO` particionado com recarga idempotente, staging persistente com
