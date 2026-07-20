@@ -128,8 +128,21 @@ def summarize_with_pandas(table: pa.Table) -> pd.DataFrame:
     )
 
 
+# Sem limite, o write_dataset gera um único arquivo por partição, por maior que
+# ela seja (a partição "ouro" sairia com ~590MB num part-0.parquet só). Com
+# ~18 bytes/linha no parquet final, 3M linhas dão arquivos de ~50MB — partições
+# grandes viram múltiplos parts (part-0.parquet, part-1.parquet, ...).
+MAX_ROWS_PER_FILE = 3_000_000
+
+
 def write_rich_output(table: pa.Table) -> None:
-    """Grava o resultado final em ``data/rich/order_metrics``, particionado por tier."""
+    """Grava o resultado final em ``data/rich/order_metrics``, particionado por tier.
+
+    ``max_rows_per_file`` limita o tamanho de cada arquivo: partições maiores
+    que o limite são divididas em vários ``part-{i}.parquet`` (~50MB cada) —
+    o layout típico de saída de jobs distribuídos, e mais amigável para leitura
+    paralela e object stores do que um arquivo único gigante.
+    """
     out_dir = RICH_DIR / "order_metrics"
     if out_dir.exists():
         shutil.rmtree(out_dir)
@@ -139,8 +152,11 @@ def write_rich_output(table: pa.Table) -> None:
         format="parquet",
         partitioning=ds.partitioning(pa.schema([("customer_tier", pa.string())]), flavor="hive"),
         existing_data_behavior="overwrite_or_ignore",
+        max_rows_per_file=MAX_ROWS_PER_FILE,
+        max_rows_per_group=1_000_000,
     )
-    print(f"[rich] {table.num_rows:,} linhas gravadas em {out_dir}")
+    num_files = len(list(out_dir.rglob("*.parquet")))
+    print(f"[rich] {table.num_rows:,} linhas em {num_files} arquivos gravadas em {out_dir}")
 
 
 def main() -> None:

@@ -89,3 +89,8 @@ def test_full_pipeline_against_raw_data(tmp_path, monkeypatch):
     assert result.count_rows() == 33_769_710
     assert "cumulative_spend" in result.schema.names
     assert "customer_tier" in result.schema.names
+
+    # max_rows_per_file divide partições grandes em múltiplos part-{i}.parquet:
+    # "ouro" (~33.7M linhas) precisa de vários arquivos, as demais cabem em um
+    ouro_parts = list((tmp_path / "order_metrics" / "customer_tier=ouro").glob("*.parquet"))
+    assert len(ouro_parts) >= 2
