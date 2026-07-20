@@ -98,3 +98,7 @@ Ferramentas usadas em todo o tutorial:
 Referências específicas de cada tecnologia estão no `README.md` da subpasta
 correspondente ([`pandas/`](pandas), [`pyarrow/`](pyarrow), [`DuckDB/`](DuckDB),
 [`rust-extension/`](rust-extension)).
+
+## Licença
+
+Distribuído sob a licença MIT — ver [LICENSE](LICENSE).
