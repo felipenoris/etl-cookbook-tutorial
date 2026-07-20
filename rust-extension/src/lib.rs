@@ -28,12 +28,13 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::thread::JoinHandle;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float64Type, Int32Type, Int64Type};
-use arrow_array::{Float64Array, RecordBatch, StringArray};
+use arrow_array::{Float64Array, Int64Array, PrimitiveArray, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3_arrow::PyRecordBatch;
 
@@ -215,6 +216,215 @@ fn compute_customer_running_spend(
     Ok(obj.unbind())
 }
 
+// ---------------------------------------------------------------------------
+// Multithreading: projeção de receita de contratos em paralelo
+// ---------------------------------------------------------------------------
+
+/// Busca uma coluna e faz downcast tipado com mensagem de erro amigável
+/// (`as_primitive_opt` devolve `None` em vez de dar panic se o tipo divergir).
+fn typed_column<'a, T: arrow_array::types::ArrowPrimitiveType>(
+    batch: &'a RecordBatch,
+    name: &str,
+) -> PyResult<&'a PrimitiveArray<T>> {
+    let col = get_column(batch, name)?;
+    if col.null_count() > 0 {
+        return Err(PyValueError::new_err(format!(
+            "coluna '{name}' tem {} nulo(s); contratos devem estar completos",
+            col.null_count()
+        )));
+    }
+    col.as_primitive_opt::<T>().ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "coluna '{name}' deveria ser {:?}, mas é {:?}",
+            T::DATA_TYPE,
+            col.data_type()
+        ))
+    })
+}
+
+/// Núcleo do cálculo: receita total projetada de UM contrato (juros da tabela
+/// Price), simulando a evolução do saldo devedor mês a mês.
+///
+/// Existe forma fechada para este caso (`n * parcela - principal` — os testes
+/// usam-na como referência), mas o loop mensal representa as projeções reais
+/// (indexadores, curvas, prépagamento) que não têm forma fechada — e é o
+/// custo de CPU por contrato que justifica paralelizar.
+fn project_contract_revenue(principal: f64, monthly_rate: f64, months: i32) -> f64 {
+    if monthly_rate <= 0.0 || months <= 0 {
+        return 0.0;
+    }
+    let factor = (1.0 + monthly_rate).powi(months);
+    let installment = principal * monthly_rate * factor / (factor - 1.0);
+    let mut balance = principal;
+    let mut revenue = 0.0;
+    for _ in 0..months {
+        let interest = balance * monthly_rate;
+        revenue += interest;
+        balance -= installment - interest;
+    }
+    revenue
+}
+
+/// Processa um lote inteiro de contratos (roda DENTRO da worker thread).
+///
+/// Recebe os arrays tipados já validados — são `Arc`s sobre os buffers Arrow
+/// originais, então mover para a thread não copia dados. Devolve os vetores
+/// de saída prontos para consolidação.
+fn process_contracts_batch(
+    ids: PrimitiveArray<Int64Type>,
+    principals: PrimitiveArray<Float64Type>,
+    rates: PrimitiveArray<Float64Type>,
+    months: PrimitiveArray<Int32Type>,
+) -> (Vec<i64>, Vec<f64>) {
+    let n = ids.len();
+    let mut out_ids = Vec::with_capacity(n);
+    let mut out_revenues = Vec::with_capacity(n);
+    for row in 0..n {
+        out_ids.push(ids.value(row));
+        out_revenues.push(project_contract_revenue(
+            principals.value(row),
+            rates.value(row),
+            months.value(row),
+        ));
+    }
+    (out_ids, out_revenues)
+}
+
+/// Projeta a receita de um lote de contratos de forma **sequencial** (síncrona).
+///
+/// Espera as colunas `id_contrato` (int64), `principal` (float64),
+/// `taxa_mensal` (float64) e `prazo_meses` (int32), sem nulos. Devolve um
+/// `pyarrow.RecordBatch` com `id_contrato` e `receita_projetada`.
+///
+/// Serve de linha de base para comparar com `ParallelRevenueProjector`, que
+/// faz o mesmo cálculo distribuindo os lotes entre threads.
+#[pyfunction]
+fn project_revenue_batch(py: Python<'_>, batch: PyRecordBatch) -> PyResult<Py<PyAny>> {
+    let record_batch = batch.into_inner();
+    let ids = typed_column::<Int64Type>(&record_batch, "id_contrato")?.clone();
+    let principals = typed_column::<Float64Type>(&record_batch, "principal")?.clone();
+    let rates = typed_column::<Float64Type>(&record_batch, "taxa_mensal")?.clone();
+    let months = typed_column::<Int32Type>(&record_batch, "prazo_meses")?.clone();
+
+    // py.detach() solta o GIL durante o número-crunching: outras threads
+    // Python podem rodar enquanto o Rust calcula.
+    let (out_ids, out_revenues) =
+        py.detach(|| process_contracts_batch(ids, principals, rates, months));
+
+    build_revenue_batch(py, out_ids, out_revenues)
+}
+
+/// Monta o RecordBatch de saída (id_contrato, receita_projetada) e converte
+/// para `pyarrow.RecordBatch` (mesma discussão de retorno do doc do módulo).
+fn build_revenue_batch(py: Python<'_>, ids: Vec<i64>, revenues: Vec<f64>) -> PyResult<Py<PyAny>> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id_contrato", DataType::Int64, false),
+        Field::new("receita_projetada", DataType::Float64, false),
+    ]));
+    let columns: Vec<arrow_array::ArrayRef> = vec![
+        Arc::new(Int64Array::from(ids)),
+        Arc::new(Float64Array::from(revenues)),
+    ];
+    let out = RecordBatch::try_new(schema, columns).map_err(arrow_err)?;
+    let obj = PyRecordBatch::new(out).into_pyarrow(py)?;
+    Ok(obj.unbind())
+}
+
+/// Projetor de receita com processamento paralelo por lote.
+///
+/// O padrão de uso (ver `run_contracts_parallel.py`):
+///
+/// 1. o Python lê a fonte de dados em lotes e chama `submit_batch(batch)`
+///    para cada um, **serialmente**;
+/// 2. cada `submit_batch` valida o lote, dispara uma thread Rust para
+///    processá-lo e **retorna imediatamente** — o Python segue lendo o
+///    próximo lote enquanto os anteriores são calculados em paralelo;
+/// 3. ao final, `collect()` espera todas as threads terminarem e devolve um
+///    único `pyarrow.RecordBatch` consolidado (`id_contrato`,
+///    `receita_projetada`), na ordem de submissão.
+///
+/// As threads são Rust puro e não tocam em objetos Python, então rodam fora
+/// do GIL — o paralelismo é real. Para produção com muitos lotes pequenos,
+/// um pool de tamanho fixo (ex.: rayon) evita criar uma thread por lote;
+/// aqui `thread::spawn` mantém o exemplo enxuto.
+#[pyclass]
+struct ParallelRevenueProjector {
+    handles: Vec<JoinHandle<(Vec<i64>, Vec<f64>)>>,
+    // contador separado dos handles: sobrevive ao mem::take do collect()
+    submitted: usize,
+    finished: bool,
+}
+
+#[pymethods]
+impl ParallelRevenueProjector {
+    #[new]
+    fn new() -> Self {
+        Self {
+            handles: Vec::new(),
+            submitted: 0,
+            finished: false,
+        }
+    }
+
+    /// Submete um lote para processamento em background; retorna o número de
+    /// lotes submetidos até agora. Lança `ValueError` se `collect()` já foi
+    /// chamado ou se o lote não tem as colunas esperadas.
+    fn submit_batch(&mut self, batch: PyRecordBatch) -> PyResult<usize> {
+        if self.finished {
+            return Err(PyValueError::new_err(
+                "collect() já foi chamado; crie um novo ParallelRevenueProjector",
+            ));
+        }
+        let record_batch = batch.into_inner();
+
+        // Validação na thread chamadora: erros de schema aparecem aqui, na
+        // submissão, e não escondidos dentro de uma worker thread.
+        let ids = typed_column::<Int64Type>(&record_batch, "id_contrato")?.clone();
+        let principals = typed_column::<Float64Type>(&record_batch, "principal")?.clone();
+        let rates = typed_column::<Float64Type>(&record_batch, "taxa_mensal")?.clone();
+        let months = typed_column::<Int32Type>(&record_batch, "prazo_meses")?.clone();
+
+        // `spawn` move os Arcs (não os dados) para a thread e retorna na hora.
+        self.handles.push(std::thread::spawn(move || {
+            process_contracts_batch(ids, principals, rates, months)
+        }));
+        self.submitted += 1;
+        Ok(self.submitted)
+    }
+
+    /// Quantidade de lotes submetidos desde a criação (não zera no collect).
+    fn batches_submitted(&self) -> usize {
+        self.submitted
+    }
+
+    /// Espera todas as threads terminarem e devolve o resultado consolidado
+    /// como um `pyarrow.RecordBatch` (`id_contrato`, `receita_projetada`).
+    fn collect(&mut self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        self.finished = true;
+        let handles = std::mem::take(&mut self.handles);
+
+        // O join espera as workers — py.detach() solta o GIL nesse meio
+        // tempo para não bloquear outras threads Python.
+        let results: Vec<(Vec<i64>, Vec<f64>)> = py.detach(|| {
+            handles
+                .into_iter()
+                .map(|h| h.join())
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|_| PyRuntimeError::new_err("uma worker thread do projetor entrou em panic"))?;
+
+        // Consolidação: concatena os resultados na ordem de submissão.
+        let total: usize = results.iter().map(|(ids, _)| ids.len()).sum();
+        let mut all_ids = Vec::with_capacity(total);
+        let mut all_revenues = Vec::with_capacity(total);
+        for (ids, revenues) in results {
+            all_ids.extend(ids);
+            all_revenues.extend(revenues);
+        }
+        build_revenue_batch(py, all_ids, all_revenues)
+    }
+}
+
 /// Registro do módulo Python `etl_rust_ext._etl_rust_ext` (nome definido no
 /// `[tool.maturin]` do `pyproject.toml`); o pacote `etl_rust_ext` reexporta
 /// as funções em `python/etl_rust_ext/__init__.py`.
@@ -222,5 +432,7 @@ fn compute_customer_running_spend(
 fn _etl_rust_ext(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(add_line_total, m)?)?;
     m.add_function(wrap_pyfunction!(compute_customer_running_spend, m)?)?;
+    m.add_function(wrap_pyfunction!(project_revenue_batch, m)?)?;
+    m.add_class::<ParallelRevenueProjector>()?;
     Ok(())
 }

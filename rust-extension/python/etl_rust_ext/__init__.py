@@ -14,7 +14,7 @@ Python, o trabalho pesado na camada Rust.
 
 import pyarrow as pa
 
-from ._etl_rust_ext import add_line_total
+from ._etl_rust_ext import ParallelRevenueProjector, add_line_total, project_revenue_batch
 from ._etl_rust_ext import compute_customer_running_spend as _compute_customer_running_spend
 
 DEFAULT_THRESHOLD_PRATA = 500.0
@@ -53,4 +53,9 @@ def compute_customer_running_spend(
     return _compute_customer_running_spend(batch, threshold_prata, threshold_ouro)
 
 
-__all__ = ["add_line_total", "compute_customer_running_spend"]
+__all__ = [
+    "ParallelRevenueProjector",
+    "add_line_total",
+    "compute_customer_running_spend",
+    "project_revenue_batch",
+]
