@@ -16,6 +16,8 @@ rust-extension/
   python/etl_rust_ext/     # pacote Python (mixed layout do maturin)
     __init__.py
   run_etl.py               # pipeline de ETL completo (DuckDB -> pyarrow -> Rust -> pandas -> parquet)
+  docs_demo.py             # demonstração dos recursos do pdoc (math, mermaid, include, markdown)
+  docs_includes/            # arquivos markdown puxados via `.. include::` nas docstrings
   docs/                     # gerado por `pdoc` (etapa 7) — abrir docs/index.html no browser
 ```
 
@@ -75,11 +77,28 @@ a extensão Rust, resume com pandas (backend Arrow) e grava o resultado em
 ## Documentação (etapa 7)
 
 ```bash
-uv run pdoc --output-dir docs etl_rust_ext ./run_etl.py
+uv run pdoc --math --mermaid --docformat google --output-dir docs etl_rust_ext ./run_etl.py ./docs_demo.py
 ```
 
 Gera HTML estático em `docs/`, navegável abrindo `docs/index.html` direto do
 disco no browser (sem precisar de servidor).
+
+As flags e o módulo extra:
+
+- `--math` — renderiza fórmulas LaTeX nas docstrings (`$...$` inline,
+  `$$...$$` em destaque) via MathJax;
+- `--mermaid` — renderiza blocos ```` ```mermaid ```` como diagramas;
+- `--docformat google` — formata seções `Args:`/`Returns:`/`Raises:` das
+  docstrings estilo Google como listas estruturadas;
+- `docs_demo.py` — módulo de demonstração que exercita esses recursos, mais a
+  inclusão de arquivo markdown externo (diretiva `.. include::`, puxando
+  `docs_includes/glossario.md`) e os marcadores usuais (tabelas, listas,
+  negrito/itálico, citações, blocos de código). Abra `docs/docs_demo.html`
+  lado a lado com o fonte `docs_demo.py` para ver como cada efeito é obtido.
+
+Observação: MathJax e mermaid são carregados de CDN — o HTML abre localmente
+sem servidor, mas fórmulas e diagramas precisam de acesso à internet para
+renderizar.
 
 A pasta `docs/` é gerada automaticamente e **não é versionada** (está no
 `.gitignore` da raiz). Para limpar a documentação gerada:
