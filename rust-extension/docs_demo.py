@@ -3,7 +3,8 @@ r"""Demonstração dos recursos de documentação do **pdoc**.
 Este módulo não faz parte do ETL: ele existe para exercitar, num lugar só, os
 recursos de composição de documentação que o [pdoc](https://pdoc.dev/) oferece
 — fórmulas matemáticas (`--math`), diagramas [mermaid](https://mermaid.js.org/)
-(`--mermaid`), inclusão de arquivos markdown (`.. include::`) e os marcadores
+(`--mermaid`), inclusão de arquivos markdown (`.. include::`), docstring
+dinâmica (conteúdo gerado por execução, na última seção) e os marcadores
 usuais de markdown. Compare este HTML gerado com o fonte em `docs_demo.py`
 para ver como cada efeito foi obtido.
 
@@ -195,3 +196,56 @@ def media_movel(valores: list[float], janela: int) -> list[float]:
         trecho = valores[inicio : t + 1]
         saida.append(sum(trecho) / len(trecho))
     return saida
+
+
+# ---------------------------------------------------------------------------
+# Docstring dinâmica: o pdoc IMPORTA o módulo para documentá-lo, então código
+# de nível de módulo roda no momento da geração — e docstrings são só strings.
+# Abaixo, o __doc__ ganha uma seção construída executando juros_compostos de
+# verdade; se a implementação mudar, a tabela da documentação muda junto.
+
+
+def _tabela_de_juros(principal: float, taxa: float, periodos: list[int]) -> str:
+    r"""Monta, em markdown, a tabela de montantes usada na seção "Docstring dinâmica".
+
+    Função privada (prefixo `_`): não aparece na documentação gerada, mas é
+    executada durante o import para produzir o conteúdo da última seção do
+    `__doc__` do módulo.
+    """
+    # o "%" fica fora dos cifrões de propósito: em LaTeX ele inicia comentário
+    linhas = [
+        "| $n$ (períodos) | Montante $M$ de $C = {:.2f}$ a $i$ = {:.1%} |".format(principal, taxa),
+        "|---:|---:|",
+    ]
+    for n in periodos:
+        linhas.append(f"| {n} | {juros_compostos(principal, taxa, n):.2f} |")
+    return "\n".join(linhas)
+
+
+__doc__ += f"""
+
+---
+
+## Docstring dinâmica (conteúdo gerado por execução)
+
+O `>>>` dos doctests é **estático** — o pdoc não executa nada ao renderizar
+(quem executa doctests, para *conferir* se a saída documentada ainda bate, é
+`python -m doctest`). Mas como o pdoc *importa* o módulo para documentá-lo,
+uma docstring pode ser construída em tempo de import: `__doc__` é uma string
+como outra qualquer.
+
+Esta seção inteira foi anexada ao `__doc__` por uma f-string no fim de
+`docs_demo.py`. A tabela abaixo é o **resultado real** de chamar
+`juros_compostos(1000.0, 0.01, n)` no momento da geração da documentação —
+se a implementação da função mudar, a tabela muda junto, sem risco de
+desatualizar:
+
+{_tabela_de_juros(1000.0, 0.01, [1, 6, 12, 24, 60])}
+
+Dois cuidados com essa técnica:
+
+- o código roda a **cada import** do módulo (não só no pdoc) — precisa ser
+  barato e sem efeitos colaterais;
+- o *View Source* do pdoc mostra o código-fonte (o template da f-string),
+  não o texto final — o leitor que compara fonte e HTML pode estranhar.
+"""

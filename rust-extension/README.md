@@ -94,9 +94,11 @@ As flags e o módulo extra:
   docstrings estilo Google como listas estruturadas;
 - `docs_demo.py` — módulo de demonstração que exercita esses recursos, mais a
   inclusão de arquivo markdown externo (diretiva `.. include::`, puxando
-  `docs_includes/glossario.md`) e os marcadores usuais (tabelas, listas,
-  negrito/itálico, citações, blocos de código). Abra `docs/docs_demo.html`
-  lado a lado com o fonte `docs_demo.py` para ver como cada efeito é obtido.
+  `docs_includes/glossario.md`), docstring dinâmica (seção do `__doc__`
+  construída executando uma função do próprio módulo no momento da geração)
+  e os marcadores usuais (tabelas, listas, negrito/itálico, citações, blocos
+  de código). Abra `docs/docs_demo.html` lado a lado com o fonte
+  `docs_demo.py` para ver como cada efeito é obtido.
 
 Observação: MathJax e mermaid são carregados de CDN — o HTML abre localmente
 sem servidor, mas fórmulas e diagramas precisam de acesso à internet para
