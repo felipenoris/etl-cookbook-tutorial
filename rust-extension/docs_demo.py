@@ -73,6 +73,42 @@ sequenceDiagram
     Rs-->>Py: RecordBatch + 2 colunas novas
 ```
 
+### Gráficos de barras e de linha (`xychart-beta`)
+
+O mermaid também plota gráficos de dados com o tipo `xychart-beta`. Barras —
+por exemplo, a receita por categoria de produto (valores ilustrativos):
+
+```mermaid
+xychart-beta
+    title "Receita por categoria (R$ milhões, ilustrativo)"
+    x-axis [eletronicos, casa, vestuario, livros, alimentos]
+    y-axis "Receita (R$ mi)" 0 --> 12
+    bar [10.8, 9.4, 8.7, 7.9, 7.2]
+```
+
+E linha, para séries históricas — a receita mês a mês das 6 partições de
+`orders`:
+
+```mermaid
+xychart-beta
+    title "Receita mensal 2025 (R$ milhões, ilustrativo)"
+    x-axis [jan, fev, mar, abr, mai, jun]
+    y-axis "Receita (R$ mi)" 6.5 --> 8
+    line [7.1, 7.3, 6.9, 7.6, 7.4, 7.7]
+```
+
+Os dois tipos podem ser sobrepostos no mesmo gráfico (barra + linha juntas,
+útil para comparar valor mensal com meta ou média):
+
+```mermaid
+xychart-beta
+    title "Receita mensal vs. meta (R$ milhões, ilustrativo)"
+    x-axis [jan, fev, mar, abr, mai, jun]
+    y-axis "Receita (R$ mi)" 6 --> 8.5
+    bar [7.1, 7.3, 6.9, 7.6, 7.4, 7.7]
+    line [7.2, 7.2, 7.2, 7.5, 7.5, 7.5]
+```
+
 ## Fórmulas matemáticas
 
 Com a flag `--math`, fórmulas inline usam um cifrão — como $S_c(n)$ ou

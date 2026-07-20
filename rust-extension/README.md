@@ -87,7 +87,9 @@ As flags e o módulo extra:
 
 - `--math` — renderiza fórmulas LaTeX nas docstrings (`$...$` inline,
   `$$...$$` em destaque) via MathJax;
-- `--mermaid` — renderiza blocos ```` ```mermaid ```` como diagramas;
+- `--mermaid` — renderiza blocos ```` ```mermaid ```` como diagramas
+  (fluxograma, sequência, pizza e gráficos de barras/linha via
+  `xychart-beta`);
 - `--docformat google` — formata seções `Args:`/`Returns:`/`Raises:` das
   docstrings estilo Google como listas estruturadas;
 - `docs_demo.py` — módulo de demonstração que exercita esses recursos, mais a
