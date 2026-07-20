@@ -1,0 +1,32 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "etl-rust-ext"
+version = "0.1.0"
+description = "ETL com extensão Rust (PyO3 + pyo3-arrow) sobre orders/customers/products"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "duckdb>=1.1",
+    "pyarrow>=17",
+    "pandas>=2.2",
+]
+
+[dependency-groups]
+dev = [
+    "pdoc>=14",
+    "pytest>=8",
+]
+
+[tool.maturin]
+python-source = "python"
+module-name = "etl_rust_ext._etl_rust_ext"
+features = ["pyo3/extension-module"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: testes que rodam o pipeline completo sobre data/raw (deselecione com -m 'not slow')",
+]

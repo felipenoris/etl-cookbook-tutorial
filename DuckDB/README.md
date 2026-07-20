@@ -1,0 +1,63 @@
+# DuckDB — conceitos e manipulação de parquet particionado
+
+Projeto Python isolado (gerenciado com `uv`) que exercita a API Python do
+DuckDB sobre os dados fictícios em [`../data/raw`](../data/raw).
+
+## Setup
+
+```bash
+cd DuckDB
+uv sync
+```
+
+## Conceitos centrais do DuckDB
+
+- **In-process / embutido**: DuckDB roda dentro do processo Python (como o
+  SQLite), sem servidor separado. `duckdb.connect()` (sem argumento, ou
+  `":memory:"`) abre um banco em memória; passar um caminho de arquivo `.duckdb`
+  persiste o estado entre execuções.
+- **Relation API vs SQL puro**: `con.sql("SELECT ...")` roda uma query e
+  devolve uma `DuckDBPyRelation` (lazy, só executa de fato quando você pede o
+  resultado com `.fetchall()`/`.df()`/`.arrow()`). `con.execute(...)` é mais
+  parecido com DB-API (cursor), útil para comandos sem retorno tabular
+  (`INSERT`, `SET`, `PRAGMA`).
+- **Leitura direta de parquet**: `read_parquet('caminho/**/*.parquet',
+  hive_partitioning=true)` lê arquivos particionados sem precisar declarar
+  tabelas antes — o DuckDB infere o schema e reconstrói as colunas de
+  partição a partir do path.
+- **Predicate/partition pruning**: ao filtrar por uma coluna de partição, o
+  DuckDB evita abrir arquivos que não podem satisfazer o filtro — visível no
+  plano de `EXPLAIN`.
+- **Memória e spill em disco**: por padrão o DuckDB usa até ~80% da RAM
+  detectada. `SET memory_limit='256MB'` reduz esse teto; `SET
+  temp_directory='...'` define onde ele grava buffers temporários quando uma
+  operação (sort, join, aggregate) não cabe no limite configurado — o
+  chamado *spill to disk*. Isso é o que permite processar arquivos maiores
+  que a RAM disponível sem estourar memória.
+- **Threads**: `SET threads=N` controla o paralelismo interno do motor
+  vetorizado.
+
+## Exemplos
+
+| Script | Conceitos |
+| --- | --- |
+| `01_connecting_and_querying.py` | `connect()`, `con.sql()` vs `con.execute()`, SELECT sobre glob |
+| `02_reading_partitioned_parquet.py` | `hive_partitioning=true`, partition pruning via `EXPLAIN` |
+| `03_joins_and_aggregations.py` | join de 3 tabelas, agregações, window functions (`ROW_NUMBER`, `QUALIFY`) |
+| `04_memory_limit_and_spill.py` | `memory_limit`, `temp_directory`, forçando spill num sort/aggregate grande |
+| `05_pandas_arrow_interop.py` | `.arrow()`/`.df()`, handoff zero-copy com pyarrow e pandas (backend Arrow) |
+
+```bash
+uv run examples/01_connecting_and_querying.py
+```
+
+## Testes
+
+```bash
+uv run pytest
+```
+
+Os testes em `tests/` fazem duas coisas: rodam cada script de `examples/` num
+subprocesso (smoke test — o exemplo inteiro deve executar sem erro) e validam
+os contratos que os exemplos assumem (schema/dtypes dos dados, integridade das
+chaves de join, comportamento das operações principais).

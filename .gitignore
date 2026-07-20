@@ -1,0 +1,25 @@
+# Ambientes virtuais e caches Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+dist/
+
+# Lockfiles do uv (padrão adotado neste projeto: não versionar)
+uv.lock
+
+# Artefatos de build do Rust / maturin
+target/
+*.so
+
+# Dados parquet gerados (recrie com: uv run data/generate_data.py --generate)
+*.parquet
+
+# Documentação HTML gerada automaticamente (recrie com pdoc; ver rust-extension/README.md)
+rust-extension/docs/
+
+# Arquivos do sistema operacional / editores
+.DS_Store
+.idea/
+.vscode/
