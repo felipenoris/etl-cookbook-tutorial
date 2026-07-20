@@ -76,8 +76,25 @@ fn add_line_total(py: Python<'_>, batch: PyRecordBatch) -> PyResult<Py<PyAny>> {
 /// Espera as colunas `customer_id` (int64) e `amount` (float64); assume que o
 /// batch já está ordenado por `customer_id`/data (o `run_etl.py` garante isso
 /// via `ORDER BY` no DuckDB antes de chamar esta função).
+///
+/// Os limites de classificação chegam como argumentos: gasto acumulado abaixo
+/// de `threshold_prata` é "bronze", abaixo de `threshold_ouro` é "prata" e a
+/// partir dele, "ouro". Os defaults (500.0 / 2000.0) ficam no wrapper Python
+/// (`etl_rust_ext/__init__.py`) — aqui os dois são obrigatórios.
 #[pyfunction]
-fn compute_customer_running_spend(py: Python<'_>, batch: PyRecordBatch) -> PyResult<Py<PyAny>> {
+#[pyo3(signature = (batch, threshold_prata, threshold_ouro))]
+fn compute_customer_running_spend(
+    py: Python<'_>,
+    batch: PyRecordBatch,
+    threshold_prata: f64,
+    threshold_ouro: f64,
+) -> PyResult<Py<PyAny>> {
+    if threshold_prata > threshold_ouro {
+        return Err(PyValueError::new_err(format!(
+            "threshold_prata ({threshold_prata}) deve ser <= threshold_ouro ({threshold_ouro})"
+        )));
+    }
+
     let record_batch = batch.into_inner();
 
     let customer_id = get_column(&record_batch, "customer_id")?.as_primitive::<Int64Type>();
@@ -98,9 +115,9 @@ fn compute_customer_running_spend(py: Python<'_>, batch: PyRecordBatch) -> PyRes
         };
         let total = running_totals.entry(cid).or_insert(0.0);
         *total += amt;
-        let tier_label = if *total < 500.0 {
+        let tier_label = if *total < threshold_prata {
             "bronze"
-        } else if *total < 2000.0 {
+        } else if *total < threshold_ouro {
             "prata"
         } else {
             "ouro"

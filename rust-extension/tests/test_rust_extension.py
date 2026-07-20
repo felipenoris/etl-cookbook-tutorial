@@ -89,6 +89,32 @@ class TestComputeCustomerRunningSpend:
         with pytest.raises(ValueError, match="amount"):
             compute_customer_running_spend(batch)
 
+    def test_custom_thresholds_change_tiers(self):
+        batch = make_batch(
+            customer_id=pa.array([1, 1, 1], type=pa.int64()),
+            amount=pa.array([50.0, 100.0, 200.0], type=pa.float64()),
+        )
+        # acumulado: 50, 150, 350 — com thresholds 100/300 vira bronze/prata/ouro
+        out = compute_customer_running_spend(batch, threshold_prata=100.0, threshold_ouro=300.0)
+        assert out.column("customer_tier").to_pylist() == ["bronze", "prata", "ouro"]
+
+    def test_thresholds_defaults_match_positional_call(self):
+        batch = make_batch(
+            customer_id=pa.array([1, 1], type=pa.int64()),
+            amount=pa.array([499.0, 1501.0], type=pa.float64()),
+        )
+        by_default = compute_customer_running_spend(batch)
+        explicit = compute_customer_running_spend(batch, 500.0, 2000.0)
+        assert by_default.equals(explicit)
+
+    def test_inverted_thresholds_raise(self):
+        batch = make_batch(
+            customer_id=pa.array([1], type=pa.int64()),
+            amount=pa.array([10.0], type=pa.float64()),
+        )
+        with pytest.raises(ValueError, match="threshold_prata"):
+            compute_customer_running_spend(batch, threshold_prata=2000.0, threshold_ouro=500.0)
+
     def test_zero_copy_roundtrip_returns_real_pyarrow_batch(self):
         batch = make_batch(
             customer_id=pa.array([7], type=pa.int64()),

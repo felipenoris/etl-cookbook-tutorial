@@ -49,10 +49,16 @@ durante o build. Qualquer mudança em `src/lib.rs` exige rodar `uv sync` (ou
 ## Funções expostas (`etl_rust_ext`)
 
 - `add_line_total(batch)` — exemplo simples: `line_total = quantity * unit_price`.
-- `compute_customer_running_spend(batch)` — exemplo que justifica sair do
-  domínio vetorizado: acumula o gasto por cliente num único loop sequencial
-  com estado (`HashMap<customer_id, total>`) e classifica um tier
-  (bronze/prata/ouro), algo caro em Python puro e trivial em Rust.
+- `compute_customer_running_spend(batch, threshold_prata=500.0, threshold_ouro=2000.0)`
+  — exemplo que justifica sair do domínio vetorizado: acumula o gasto por
+  cliente num único loop sequencial com estado (`HashMap<customer_id, total>`)
+  e classifica um tier (bronze/prata/ouro) segundo os thresholds informados.
+
+`compute_customer_running_spend` também ilustra um padrão comum em extensões
+nativas: a função Rust (`src/lib.rs`) exige todos os argumentos, e um helper
+fino em Python de mesmo nome (`python/etl_rust_ext/__init__.py`) fornece os
+defaults e a docstring — a assinatura amigável fica na camada Python, o
+trabalho pesado na camada Rust.
 
 ## Rodando o ETL completo
 
@@ -69,7 +75,7 @@ a extensão Rust, resume com pandas (backend Arrow) e grava o resultado em
 ## Documentação (etapa 7)
 
 ```bash
-uv run pdoc --output-dir docs etl_rust_ext run_etl
+uv run pdoc --output-dir docs etl_rust_ext ./run_etl.py
 ```
 
 Gera HTML estático em `docs/`, navegável abrindo `docs/index.html` direto do
