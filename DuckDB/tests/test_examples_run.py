@@ -7,10 +7,19 @@ import pytest
 
 from conftest import EXAMPLES_DIR, PROJECT_ROOT
 
-EXAMPLE_SCRIPTS = sorted(EXAMPLES_DIR.glob("[0-9]*.py"))
+NETWORK_EXAMPLES = {"13_reading_public_s3.py"}
+
+EXAMPLE_SCRIPTS = [
+    pytest.param(
+        path,
+        id=path.name,
+        marks=pytest.mark.network if path.name in NETWORK_EXAMPLES else (),
+    )
+    for path in sorted(EXAMPLES_DIR.glob("[0-9]*.py"))
+]
 
 
-@pytest.mark.parametrize("script", EXAMPLE_SCRIPTS, ids=lambda p: p.name)
+@pytest.mark.parametrize("script", EXAMPLE_SCRIPTS)
 def test_example_runs_without_error(script):
     result = subprocess.run(
         [sys.executable, str(script)],

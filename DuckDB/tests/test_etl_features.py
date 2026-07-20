@@ -206,6 +206,28 @@ def test_sorted_parquet_has_selective_zonemaps(tmp_path: Path, con):
         assert linhas == 1000
 
 
+@pytest.mark.network
+def test_remote_parquet_over_https(con):
+    # exemplo 13: leitura remota via httpfs — schema e contagem estáveis
+    url = "https://blobs.duckdb.org/stations.parquet"
+    colunas = {r[0] for r in con.sql(f"DESCRIBE SELECT * FROM read_parquet('{url}')").fetchall()}
+    assert {"code", "name_long", "country"} <= colunas
+    assert con.sql(f"SELECT COUNT(*) FROM read_parquet('{url}')").fetchone()[0] == 578
+
+
+@pytest.mark.network
+def test_remote_parquet_over_s3_anonymous(con):
+    con.execute("CREATE SECRET pub (TYPE s3, PROVIDER config, REGION 'us-east-1')")
+    total = con.sql(
+        """
+        SELECT COUNT(*)
+        FROM read_parquet('s3://noaa-ghcn-pds/parquet/by_year/YEAR=1763/*/*.parquet',
+                          hive_partitioning=true)
+        """
+    ).fetchone()[0]
+    assert total == 730  # ano de 1763: 365 TMAX + 365 TMIN (dado histórico, estável)
+
+
 def test_python_udf_native_and_arrow(con):
     import pyarrow.compute as pc
     from duckdb.sqltypes import DOUBLE, VARCHAR

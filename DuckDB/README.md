@@ -53,6 +53,7 @@ uv sync
 | `10_macros_and_python_udfs.py` | `CREATE MACRO` (escalar e de tabela), UDF Python nativa vs. vetorizada (`type="arrow"`) |
 | `11_export_import_and_views_vs_tables.py` | `EXPORT`/`IMPORT DATABASE` (um parquet por tabela + `schema.sql`), view vs. tabela materializada (timing e `EXPLAIN`) |
 | `12_performance_without_indexes.py` | o "índice" do mundo parquet: partition pruning + `ORDER BY` na escrita (zonemaps/`parquet_metadata`), leitura colunar, hash join sem índice |
+| `13_reading_public_s3.py` | parquet remoto via httpfs: `https://` e `s3://` anônimo (`CREATE SECRET`), range requests, join remoto, glob hive no S3 — **exige internet** (~2MB) |
 
 ## Performance sem índices (exemplo 12)
 
@@ -78,13 +79,18 @@ uv run examples/01_connecting_and_querying.py
 ## Testes
 
 ```bash
-uv run pytest
+uv run pytest                # suíte completa (3 testes exigem internet)
+uv run pytest --no-network   # pula os testes marcados com 'network'
 ```
 
 Os testes em `tests/` fazem duas coisas: rodam cada script de `examples/` num
 subprocesso (smoke test — o exemplo inteiro deve executar sem erro) e validam
 os contratos que os exemplos assumem (schema/dtypes dos dados, integridade das
 chaves de join, comportamento das operações principais).
+
+Os testes do exemplo 13 (leitura de buckets S3/HTTP públicos) são marcados
+com `@pytest.mark.network`; a flag `--no-network` (definida em
+`tests/conftest.py`) os pula em ambientes sem acesso à internet.
 
 ## Referências
 

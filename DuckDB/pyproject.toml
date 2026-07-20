@@ -17,3 +17,6 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "network: testes que exigem acesso à internet (pule com --no-network)",
+]
