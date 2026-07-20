@@ -104,6 +104,33 @@ Observação: MathJax e mermaid são carregados de CDN — o HTML abre localment
 sem servidor, mas fórmulas e diagramas precisam de acesso à internet para
 renderizar.
 
+### Documentação do crate Rust (rustdoc)
+
+A camada Rust tem documentação própria, gerada pelo `cargo doc` a partir dos
+comentários `//!` (módulo) e `///` (itens) de `src/lib.rs`:
+
+```bash
+cargo doc --no-deps --document-private-items
+```
+
+Abra `target/doc/_etl_rust_ext/index.html` no browser (HTML estático, direto
+do disco). As flags:
+
+- `--no-deps` — documenta só o nosso crate, sem as dependências (pyo3,
+  arrow-rs etc., que já têm docs no [docs.rs](https://docs.rs/));
+- `--document-private-items` — necessário porque as funções `#[pyfunction]`
+  são privadas no Rust (quem as expõe ao Python é o `#[pymodule]`); sem a
+  flag, a página sairia só com a documentação do módulo.
+
+Para limpar apenas os artefatos de documentação (sem descartar o build):
+
+```bash
+cargo clean --doc
+```
+
+A saída fica dentro de `target/`, que já está no `.gitignore` da raiz — nada
+a versionar.
+
 A pasta `docs/` é gerada automaticamente e **não é versionada** (está no
 `.gitignore` da raiz). Para limpar a documentação gerada:
 
