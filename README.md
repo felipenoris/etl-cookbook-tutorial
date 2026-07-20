@@ -51,10 +51,59 @@ uv run data/generate_data.py --clean              # remove os parquet de raw/ e 
 uv run data/generate_data.py --clean --generate   # regenera do zero
 ```
 
+## Pré-requisitos
+
+Para rodar o `./check_all.sh` (e o repositório em geral), a máquina precisa de:
+
+1. **[`uv`](https://docs.astral.sh/uv/)** — o único gerenciador a instalar
+   para o lado Python. Ele resolve sozinho, na primeira execução, tudo o
+   mais: o interpretador Python de cada projeto, as dependências
+   (pandas/pyarrow/duckdb/numpy), o `maturin` que compila a extensão e as
+   ferramentas de dev (`pytest`, `pdoc`). Não é preciso ter Python instalado
+   nem ativar venv manualmente.
+2. **Toolchain Rust** ([rustup.rs](https://rustup.rs)) — `cargo`/`rustc`,
+   usados para compilar a extensão PyO3 (`rust-extension`) e gerar o rustdoc.
+   As crates (pyo3, arrow) são baixadas pelo cargo na primeira compilação.
+3. **Acesso à internet na primeira execução** — para o `uv` e o `cargo`
+   baixarem dependências. Depois disso, apenas 3 testes do DuckDB (leitura de
+   buckets S3 públicos, exemplo 13) precisam de rede — `./check_all.sh
+   --no-network` os pula.
+4. **bash** — os scripts `check_all.sh`/`clean_all.sh` são shell scripts
+   (macOS e Linux funcionam direto; no Windows, use WSL ou Git Bash).
+5. **~2.5GB de disco livre** — dados fictícios gerados (~1.5GB em
+   `data/raw` + `data/rich`), um `.venv` por projeto (~200-250MB cada) e o
+   build Rust (~120MB). O `./clean_all.sh` recupera esse espaço.
+
+Nada além disso: sem servidor de banco, sem Docker, sem credenciais — os
+exemplos de S3 usam buckets públicos com acesso anônimo.
+
+## Verificação completa com um comando
+
+Acabou de clonar? Um único comando gera os dados, roda as 4 suítes de testes
+(cujos smoke tests executam **todos** os scripts de `examples/`), executa os
+dois pipelines do `rust-extension` e gera as documentações (pdoc e cargo doc):
+
+```bash
+./check_all.sh                # completo (3 testes do DuckDB usam internet)
+./check_all.sh --no-network   # ambiente sem acesso à internet
+```
+
+Qualquer falha interrompe o script; ao final, um "Tudo OK!" confirma que o
+repositório está funcional.
+
+O inverso — remover tudo que foi gerado (dados parquet, documentações, build
+Rust, caches), voltando ao estado pós-clone:
+
+```bash
+./clean_all.sh          # limpa artefatos gerados (mantém os .venv)
+./clean_all.sh --all    # também remove os .venv
+```
+
 ## Por onde começar
 
 1. `uv run data/generate_data.py --generate` — obrigatório após clonar o
-   repositório, já que os parquet não são versionados.
+   repositório, já que os parquet não são versionados (o `./check_all.sh`
+   acima já faz isso automaticamente).
 2. [`pandas/`](pandas) e [`pyarrow/`](pyarrow) — mesmos conceitos (seleção,
    limpeza, groupby, joins, pivot), comparando a API de alto nível do pandas
    com a API nativa do Arrow — mais o interop zero-copy entre as duas e o
