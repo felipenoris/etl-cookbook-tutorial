@@ -79,3 +79,16 @@ unitários dos contratos assumidos). Para rodar tudo, a partir da raiz:
 (cd DuckDB && uv run pytest)
 (cd rust-extension && uv run pytest)   # -m "not slow" pula o pipeline completo
 ```
+
+## Referências
+
+Ferramentas usadas em todo o tutorial:
+
+- [uv — documentação oficial](https://docs.astral.sh/uv/) — gerenciador de projetos/dependências Python usado em todas as subpastas; ver também [scripts standalone com PEP 723](https://peps.python.org/pep-0723/), o formato usado por `data/generate_data.py`.
+- [Formato Apache Parquet](https://parquet.apache.org/docs/) — o formato colunar de arquivo usado como origem (`data/raw`) e destino (`data/rich`).
+- [Formato colunar Apache Arrow](https://arrow.apache.org/docs/format/Columnar.html) — a representação em memória que conecta pandas, pyarrow, DuckDB e a extensão Rust sem cópias.
+- [pytest — documentação oficial](https://docs.pytest.org/en/stable/) — usado nas suítes de teste de todas as subpastas.
+
+Referências específicas de cada tecnologia estão no `README.md` da subpasta
+correspondente ([`pandas/`](pandas), [`pyarrow/`](pyarrow), [`DuckDB/`](DuckDB),
+[`rust-extension/`](rust-extension)).

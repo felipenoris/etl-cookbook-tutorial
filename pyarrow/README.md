@@ -45,3 +45,13 @@ Os testes em `tests/` fazem duas coisas: rodam cada script de `examples/` num
 subprocesso (smoke test — o exemplo inteiro deve executar sem erro) e validam
 os contratos que os exemplos assumem (schema/dtypes dos dados, integridade das
 chaves de join, comportamento das operações principais).
+
+## Referências
+
+- [pyarrow — documentação oficial](https://arrow.apache.org/docs/python/index.html) — ponto de entrada da documentação Python do Arrow.
+- [API reference do pyarrow](https://arrow.apache.org/docs/python/api.html) — referência completa (`Table`, `RecordBatch`, `Array`, `Schema`...).
+- [Compute Functions](https://arrow.apache.org/docs/python/compute.html) — o módulo `pyarrow.compute` usado nos exemplos de filtro, agregação e transformação.
+- [Tabular Datasets](https://arrow.apache.org/docs/python/dataset.html) — leitura de datasets particionados (Hive), filtros com partition pruning e escrita com `write_dataset`.
+- [Reading and Writing Parquet](https://arrow.apache.org/docs/python/parquet.html) — detalhes do `pyarrow.parquet` (row groups, compressão, metadados).
+- [Apache Arrow Cookbook (Python)](https://arrow.apache.org/cookbook/py/) — receitas oficiais de casos práticos.
+- [Formato colunar Arrow](https://arrow.apache.org/docs/format/Columnar.html) — a especificação da representação em memória; leitura recomendada para entender por que o interop com pandas/DuckDB/Rust é zero-copy.

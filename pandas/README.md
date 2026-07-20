@@ -50,3 +50,12 @@ Os testes em `tests/` fazem duas coisas: rodam cada script de `examples/` num
 subprocesso (smoke test — o exemplo inteiro deve executar sem erro) e validam
 os contratos que os exemplos assumem (schema/dtypes dos dados, integridade das
 chaves de join, comportamento das operações principais).
+
+## Referências
+
+- [User Guide do pandas](https://pandas.pydata.org/docs/user_guide/index.html) — o tutorial oficial, organizado por tema (seleção, groupby, merge, reshape...); espelha bem a sequência dos exemplos desta pasta.
+- [10 minutes to pandas](https://pandas.pydata.org/docs/user_guide/10min.html) — visão geral rápida para quem está começando.
+- [API reference do pandas](https://pandas.pydata.org/docs/reference/index.html) — referência completa de todas as funções e métodos.
+- [PyArrow functionality](https://pandas.pydata.org/docs/user_guide/pyarrow.html) — capítulo do User Guide sobre o backend Arrow (`dtype_backend="pyarrow"` / `ArrowDtype`), o modo usado em todos os exemplos daqui.
+- [Cookbook do pandas](https://pandas.pydata.org/docs/user_guide/cookbook.html) — receitas curtas de casos práticos.
+- [pyarrow — documentação oficial](https://arrow.apache.org/docs/python/index.html) — útil para entender o que existe por baixo dos `ArrowDtype`; explorado a fundo na pasta [`../pyarrow`](../pyarrow).

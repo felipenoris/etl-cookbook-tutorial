@@ -102,3 +102,14 @@ uv run pytest                 # inclui o pipeline completo sobre data/raw (~15s)
 pequenos (valores calculados, propagação de nulos, erro para coluna ausente).
 `tests/test_run_etl.py` testa cada etapa do pipeline isoladamente e, no teste
 marcado `slow`, roda o ETL inteiro gravando num diretório temporário.
+
+## Referências
+
+- [PyO3 — guia oficial](https://pyo3.rs/) — o livro do PyO3 (`#[pyfunction]`, `#[pymodule]`, conversões, GIL); ver também a [API reference no docs.rs](https://docs.rs/pyo3).
+- [pyo3-arrow — docs.rs](https://docs.rs/pyo3-arrow) — a ponte Arrow usada aqui (`PyRecordBatch`, `into_pyarrow`), com a explicação do transporte zero-copy.
+- [Arrow C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html) — a especificação (protocolo `__arrow_c_array__`) que permite passar arrays entre pyarrow e Rust sem copiar buffers.
+- [arrow-rs — implementação Rust do Arrow](https://arrow.apache.org/rust/) — as crates `arrow-array`/`arrow-schema` usadas em `src/lib.rs`.
+- [maturin — guia oficial](https://www.maturin.rs/) — o build backend que compila a crate e a empacota como módulo Python (configurado no `pyproject.toml`).
+- [arro3](https://github.com/kylebarron/arro3) — biblioteca Arrow para Python construída sobre pyo3-arrow, boa fonte de exemplos reais da API.
+- [pyo3-cookbook](https://github.com/felipenoris/pyo3-cookbook) — coletânea de receitas PyO3 que inspirou a organização desta camada Rust.
+- [pdoc — documentação oficial](https://pdoc.dev/) — a ferramenta que gera o HTML estático de `docs/` a partir das docstrings.

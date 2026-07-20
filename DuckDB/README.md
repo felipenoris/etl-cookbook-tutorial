@@ -61,3 +61,13 @@ Os testes em `tests/` fazem duas coisas: rodam cada script de `examples/` num
 subprocesso (smoke test — o exemplo inteiro deve executar sem erro) e validam
 os contratos que os exemplos assumem (schema/dtypes dos dados, integridade das
 chaves de join, comportamento das operações principais).
+
+## Referências
+
+- [DuckDB Python API](https://duckdb.org/docs/stable/clients/python/overview) — o client Python usado em todos os exemplos (`duckdb.connect`, `.sql()`, relações).
+- [SQL Introduction](https://duckdb.org/docs/stable/sql/introduction) — introdução ao dialeto SQL do DuckDB.
+- [Reading Parquet](https://duckdb.org/docs/stable/data/parquet/overview) — `read_parquet`, globs e projeção/filter pushdown.
+- [Hive Partitioning](https://duckdb.org/docs/stable/data/partitioning/hive_partitioning) — `hive_partitioning=true` e partition pruning, exercitados no exemplo 02.
+- [Configuration](https://duckdb.org/docs/stable/configuration/overview) — referência de `SET`, incluindo `memory_limit`, `temp_directory` e `preserve_insertion_order` usados no exemplo 04 (spill).
+- [Tuning Workloads](https://duckdb.org/docs/stable/guides/performance/how_to_tune_workloads) — guia de performance: memória, paralelismo e operadores que fazem spill.
+- [SQL on Arrow](https://duckdb.org/docs/stable/guides/python/sql_on_arrow) — consulta direta sobre objetos pyarrow e retorno via `.to_arrow_table()`, exercitados no exemplo 05.
