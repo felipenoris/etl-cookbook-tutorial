@@ -57,7 +57,10 @@ def extract_and_join_with_duckdb() -> pa.Table:
 
     A ordenação por ``customer_id, order_date`` é o que torna o "gasto
     acumulado por cliente" (calculado depois em Rust) coerente: cada cliente
-    tem suas linhas agrupadas e em ordem cronológica.
+    tem suas linhas agrupadas e em ordem cronológica. O ``order_id`` no final
+    desempata pedidos do mesmo cliente na mesma data — sem ele, com
+    ``preserve_insertion_order=false``, a ordem dos empates (e portanto o tier
+    das primeiras linhas de cada cliente) variaria entre execuções.
     """
     SPILL_DIR.mkdir(exist_ok=True)
     con = duckdb.connect()
@@ -78,7 +81,7 @@ def extract_and_join_with_duckdb() -> pa.Table:
         FROM read_parquet('{ORDERS_GLOB}') o
         JOIN read_parquet('{CUSTOMERS_GLOB}', hive_partitioning=true) c USING (customer_id)
         JOIN read_parquet('{PRODUCTS_GLOB}') p USING (product_id)
-        ORDER BY o.customer_id, o.order_date
+        ORDER BY o.customer_id, o.order_date, o.order_id
     """
     table = con.sql(query).to_arrow_table()
     con.close()
