@@ -52,6 +52,24 @@ uv sync
 | `09_advanced_sql_transforms.py` | `WITH RECURSIVE` (hierarquia), `PIVOT`/`UNPIVOT`, `ASOF JOIN`, `LIST`/`UNNEST` |
 | `10_macros_and_python_udfs.py` | `CREATE MACRO` (escalar e de tabela), UDF Python nativa vs. vetorizada (`type="arrow"`) |
 | `11_export_import_and_views_vs_tables.py` | `EXPORT`/`IMPORT DATABASE` (um parquet por tabela + `schema.sql`), view vs. tabela materializada (timing e `EXPLAIN`) |
+| `12_performance_without_indexes.py` | o "índice" do mundo parquet: partition pruning + `ORDER BY` na escrita (zonemaps/`parquet_metadata`), leitura colunar, hash join sem índice |
+
+## Performance sem índices (exemplo 12)
+
+A dúvida clássica de quem vem de bases transacionais: "onde crio o índice?".
+Em parquet, não cria — o paralelo é o **layout dos dados**, decidido na
+escrita:
+
+- **particionamento** (diretórios) faz o papel do índice na coluna de filtro
+  principal (partition pruning, exemplo 02);
+- **ordenar na escrita** (`COPY ... ORDER BY coluna`) faz o papel do índice
+  nas colunas secundárias: cada row group do parquet guarda min/max por
+  coluna (zonemaps), e com os dados clusterizados o DuckDB pula os row
+  groups fora da faixa — no exemplo, a consulta pontual abre 1 de 275 row
+  groups e fica ~8x mais rápida, com o mesmíssimo dado;
+- **JOINs não precisam de índice**: o DuckDB usa hash join (a dimensão vira
+  hash table em memória na hora);
+- o custo é pago 1x no ETL que grava; toda leitura posterior aproveita.
 
 ```bash
 uv run examples/01_connecting_and_querying.py

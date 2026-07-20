@@ -1,15 +1,42 @@
 """Exemplo 7 — Banco persistente como staging, ATTACH e UPSERT.
 
-Conceitos:
-- `duckdb.connect("arquivo.db")` cria/abre um banco **persistente**: tabelas
-  sobrevivem ao processo — a "área de staging" entre etapas de um ETL.
-- `CREATE TABLE ... AS SELECT` (CTAS) materializa o resultado de uma query
-  (por exemplo, a leitura de um parquet) como tabela do banco.
-- `ATTACH` conecta um segundo banco na mesma sessão; dá para mover dados entre
-  eles com um simples `INSERT INTO db2.t SELECT ... FROM db1.t` — federação
-  entre áreas (staging → produção) sem sair do SQL.
-- `INSERT ... ON CONFLICT DO UPDATE` (UPSERT) atualiza dimensões que mudam:
-  linha nova é inserida, linha existente é atualizada (exige PRIMARY KEY).
+Este é o exemplo em que o DuckDB mais se parece com uma base transacional —
+tabelas de verdade, PRIMARY KEY, transações — e a diferença está na
+infraestrutura: o "banco" inteiro é UM arquivo local, sem servidor.
+
+Comandos usados:
+
+`duckdb.connect("arquivo.db")`
+    Cria/abre um banco **persistente**: tabelas sobrevivem ao processo. Todas
+    as tabelas do banco vivem dentro desse único arquivo (não há um arquivo
+    por tabela), no formato colunar próprio do DuckDB — não é parquet.
+    É a "área de staging" natural entre etapas de um ETL.
+
+`CREATE TABLE ... AS SELECT` (CTAS)
+    Materializa o resultado de uma query como tabela do banco — a forma
+    idiomática de criar tabelas em ETL (em vez de `CREATE TABLE` + colunas +
+    `INSERT`, o schema é inferido da própria query).
+
+`CHECKPOINT`
+    Força a escrita do WAL (write-ahead log) para o arquivo principal. O
+    conceito é o mesmo das bases transacionais; a diferença é que aqui pode
+    ser invocado explicitamente para garantir o arquivo compacto/completo
+    antes de copiá-lo para outro lugar.
+
+`ATTACH 'outro.db' AS nome`
+    Conecta um segundo banco na MESMA sessão — as queries referenciam
+    `nome.tabela`. Mover dados entre bancos vira um simples
+    `INSERT INTO producao.dim SELECT ... FROM staging_tbl`. Em bases
+    cliente-servidor isso exigiria dblink/foreign data wrapper/ETL externo;
+    aqui é nativo e trivial.
+
+`INSERT ... ON CONFLICT (chave) DO UPDATE SET ...` (UPSERT)
+    Sintaxe idêntica à do Postgres: linha nova é inserida, linha existente
+    (mesma PRIMARY KEY) é atualizada — `EXCLUDED.col` referencia o valor que
+    tentou entrar. É o mecanismo para dimensões que mudam. Detalhe
+    importante: isso só funciona em TABELAS do banco (que suportam PK);
+    arquivos parquet são imutáveis — para eles, o padrão é a recarga de
+    partição do exemplo 06.
 
 Rode com: `uv run examples/07_persistent_staging_upsert.py`
 """

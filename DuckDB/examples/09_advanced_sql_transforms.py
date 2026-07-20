@@ -1,15 +1,40 @@
 """Exemplo 9 — Transformações avançadas: CTE recursiva, PIVOT, ASOF JOIN e listas.
 
-Conceitos:
-- `WITH RECURSIVE`: achatar hierarquias (plano de contas, categoria →
-  subcategoria) calculando nível e caminho completo de cada nó.
-- `PIVOT`/`UNPIVOT` como statements nativos: long → wide e de volta, o
-  equivalente SQL do `pivot_table` do pandas (exemplo 06 de `../pandas`).
-- `ASOF JOIN`: join temporal "qual era o valor vigente naquela data" — para
-  tabelas de preço/câmbio/tarifa com vigência, um problema clássico de ETL
-  que em SQL comum exige subquery correlacionada.
-- Tipos aninhados (`LIST`) com `list()` para agregar e `UNNEST` para explodir
-  de volta — semi-estruturado dentro do SQL.
+Quatro transformações que costumam expulsar o processamento do SQL para o
+Python — mas que têm solução SQL direta no DuckDB.
+
+`WITH RECURSIVE contas AS (âncora UNION ALL passo)`
+    CTE recursiva (SQL padrão, mas raramente vista fora de DBAs): a *âncora*
+    seleciona as raízes da hierarquia (`parent_id IS NULL`); o *passo
+    recursivo* junta a tabela original com o resultado acumulado, uma
+    "geração" por iteração, até não produzir linhas novas. Aqui, achata um
+    plano de contas calculando nível e caminho completo (`Ativo > Circulante
+    > Caixa`) de cada nó — o que imperativamente seria um loop com pilha.
+
+`PIVOT tabela ON coluna USING agg GROUP BY chave`
+    Statement nativo do DuckDB (não é SQL padrão — em Postgres seria
+    crosstab/CASEs manuais): transforma valores DISTINTOS de `coluna` em
+    COLUNAS do resultado (long -> wide). É o `pivot_table` do pandas em SQL,
+    com uma consequência importante: as colunas de saída dependem dos DADOS
+    (cada status vira uma coluna), coisa que o SQL clássico não permite.
+    `UNPIVOT ... ON COLUMNS(* EXCLUDE (chave))` desfaz (wide -> long);
+    `COLUMNS(* EXCLUDE ...)` é outra extensão DuckDB — seleção dinâmica de
+    colunas por padrão.
+
+`ASOF JOIN ... ON chave AND data_evento >= data_vigencia`
+    Join temporal ("as of" = "na data de"): para cada linha da esquerda, casa
+    com a ÚLTIMA linha da direita cuja vigência já começou — "qual era o
+    preço vigente na data do pedido". Em SQL comum isso exige subquery
+    correlacionada com `ORDER BY ... LIMIT 1` por linha (lento e ilegível);
+    o ASOF JOIN (DuckDB, kdb+, Polars) resolve com um merge ordenado. Para
+    tabelas de preço/câmbio/tarifa com vigência, é O comando.
+
+`list(...)` + `UNNEST(...)`
+    Tipos aninhados: `list(DISTINCT status ORDER BY status)` agrega o grupo
+    numa LISTA dentro da célula (coisa que não existe no modelo relacional
+    clássico — viola a 1ª forma normal de propósito); `UNNEST` explode a
+    lista de volta em linhas. Útil para semi-estruturado (JSON) e para
+    transportar coleções compactas entre etapas.
 
 Rode com: `uv run examples/09_advanced_sql_transforms.py`
 """

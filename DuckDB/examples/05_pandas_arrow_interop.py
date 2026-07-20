@@ -1,17 +1,25 @@
 """Exemplo 5 — Interoperabilidade zero-copy: DuckDB <-> pyarrow <-> pandas (Arrow backend).
 
-Conceitos:
-- `.to_arrow_table()` materializa o resultado de uma query como `pyarrow.Table`,
-  usando o formato colunar Arrow como meio de troca — sem serialização
-  intermediária em linhas. (`.arrow()` existe também, mas devolve um
-  `RecordBatchReader` streaming; para um `Table` completo em memória,
-  `.to_arrow_table()` é mais direto.)
-- `.df()` materializa como pandas DataFrame numpy-backed "clássico". Para
-  manter o DataFrame com backend Arrow (mesmo padrão usado em `../pandas`),
-  o caminho é ir via `to_arrow_table().to_pandas(types_mapper=pd.ArrowDtype)`.
-- DuckDB também consegue *ler* um `pyarrow.Table`/DataFrame Python como se
-  fosse uma tabela SQL, sem escrever em disco — útil para combinar um
-  resultado calculado em Python com uma nova query SQL.
+Num banco tradicional, mover o resultado de uma query para o Python passa por
+um protocolo de rede linha a linha (cursor -> fetchall -> objetos Python) — o
+custo cresce com o volume. No DuckDB o resultado já nasce colunar, no mesmo
+layout do Arrow, então a "exportação" para pyarrow/pandas é basicamente
+entregar ponteiros: **zero-copy**, custo constante.
+
+Caminhos de saída (DuckDB -> Python):
+- `.to_arrow_table()` materializa o resultado como `pyarrow.Table` — o meio
+  de troca preferido. (`.arrow()` devolve um `RecordBatchReader` streaming,
+  melhor para resultados maiores que a RAM.)
+- `.df()` devolve pandas "clássico" (numpy). Para manter o DataFrame com
+  backend Arrow — o padrão deste tutorial, ver `../pandas` — o caminho é
+  `to_arrow_table().to_pandas(types_mapper=pd.ArrowDtype)`.
+
+Caminho de entrada (Python -> DuckDB), o que mais surpreende quem vem de
+bases cliente-servidor: **o SQL enxerga variáveis Python por nome**. Se
+`tabela_python` é um `pyarrow.Table`/DataFrame no escopo, então
+`SELECT ... FROM tabela_python` simplesmente funciona ("replacement scan") —
+sem CREATE TABLE, sem INSERT, sem cópia. Isso permite alternar SQL e Python
+livremente no meio de um pipeline, usando o melhor de cada um.
 
 Rode com: `uv run examples/05_pandas_arrow_interop.py`
 """

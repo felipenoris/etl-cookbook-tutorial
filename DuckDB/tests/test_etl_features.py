@@ -170,6 +170,42 @@ def test_view_reads_parquet_and_table_reads_internal_storage(con):
     assert "READ_PARQUET" not in plano_tabela
 
 
+def test_sorted_parquet_has_selective_zonemaps(tmp_path: Path, con):
+    # mesmo dado, dois layouts: valores ciclando 0..99 (cada row group vê o
+    # range inteiro) vs ordenado (cada row group cobre faixa estreita)
+    con.execute("CREATE TABLE base AS SELECT range % 100 AS chave, range AS valor FROM range(100000)")
+    espalhado = tmp_path / "espalhado.parquet"
+    ordenado = tmp_path / "ordenado.parquet"
+    con.execute(f"COPY base TO '{espalhado}' (FORMAT parquet, ROW_GROUP_SIZE 10000)")
+    con.execute(f"COPY (SELECT * FROM base ORDER BY chave) TO '{ordenado}' (FORMAT parquet, ROW_GROUP_SIZE 10000)")
+
+    def row_groups_candidatos(arquivo: Path, alvo: int) -> tuple[int, int]:
+        return con.sql(
+            f"""
+            SELECT COUNT(*) FILTER (
+                       WHERE CAST(stats_min_value AS BIGINT) <= {alvo}
+                         AND CAST(stats_max_value AS BIGINT) >= {alvo}
+                   ),
+                   COUNT(*)
+            FROM parquet_metadata('{arquivo}')
+            WHERE path_in_schema = 'chave'
+            """
+        ).fetchone()
+
+    candidatos_espalhado, total = row_groups_candidatos(espalhado, 42)
+    candidatos_ordenado, _ = row_groups_candidatos(ordenado, 42)
+    assert total == 10
+    assert candidatos_espalhado == total  # zonemaps inúteis: todo grupo cobre 0..99
+    assert candidatos_ordenado <= 2  # zonemaps seletivas: faixa estreita por grupo
+
+    # o layout não muda o resultado, só o custo
+    for arquivo in (espalhado, ordenado):
+        linhas = con.sql(
+            f"SELECT COUNT(*) FROM read_parquet('{arquivo}') WHERE chave = 42"
+        ).fetchone()[0]
+        assert linhas == 1000
+
+
 def test_python_udf_native_and_arrow(con):
     import pyarrow.compute as pc
     from duckdb.sqltypes import DOUBLE, VARCHAR

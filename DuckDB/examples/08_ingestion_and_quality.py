@@ -1,17 +1,40 @@
 """Exemplo 8 — Ingestão de CSV sujo, linhas rejeitadas e profiling.
 
-Conceitos:
-- `read_csv` com auto-detecção: o sniffer descobre delimitador, header e tipos
-  sozinho — e aceita overrides pontuais (`types={...}`) quando você sabe mais
-  que ele.
-- `store_rejects=true`: em vez de abortar no primeiro erro, o DuckDB carrega as
-  linhas boas e registra as ruins nas tabelas `reject_errors`/`reject_scans` —
-  o padrão "quarentena" de ingestão: o ETL segue, e as rejeitadas viram
-  relatório para correção na origem.
-- `SUMMARIZE`: profiling instantâneo de qualquer tabela/parquet (min, max,
-  nulos, cardinalidade aproximada) — um data quality check de uma linha.
-- `USING SAMPLE`: desenvolver a transformação numa amostra antes de rodar no
-  dataset inteiro.
+Ingestão é onde ETLs quebram na prática — e o instinto de quem vem de bases
+transacionais ("carga aborta na primeira linha inválida, corrija e recarregue")
+não escala para arquivos de terceiros. Este exemplo mostra o ferramental do
+DuckDB para ingerir dados imperfeitos sem parar o pipeline.
+
+Comandos usados:
+
+`read_csv('arquivo.csv')` com auto-detecção
+    O *sniffer* examina uma amostra e descobre sozinho delimitador, header e
+    tipos de cada coluna. Cuidado com o efeito colateral didático mostrado
+    aqui: se uma coluna numérica tem UM valor texto, o sniffer resolve o
+    conflito rebaixando a coluna inteira para VARCHAR — a leitura funciona,
+    mas os tipos degradam silenciosamente. Por isso, cargas recorrentes devem
+    fixar `types={...}` para o sniffer não decidir sozinho.
+
+`store_rejects=true` + tabelas `reject_errors`/`reject_scans`
+    O padrão **quarentena**: em vez de abortar no primeiro erro (comportamento
+    default, e o único disponível na maioria das bases), o DuckDB carrega as
+    linhas boas e registra as ruins na tabela temporária `reject_errors` —
+    com linha, coluna, valor e motivo da rejeição. O ETL segue com o que
+    presta; as rejeitadas viram relatório para correção na origem.
+    (Pegadinha coberta nos testes: um `COUNT(*)` puro não parseia as colunas
+    e portanto não gera rejeições — materialize colunas de verdade.)
+
+`SUMMARIZE tabela_ou_query`
+    Profiling instantâneo: min, max, nulos, cardinalidade aproximada e
+    percentis de TODAS as colunas em um comando. Não existe equivalente SQL
+    padrão (seria um SELECT gigante de agregados por coluna); como primeiro
+    contato com um parquet desconhecido, é a ferramenta certa.
+
+`FROM ... USING SAMPLE 1 PERCENT (system)`
+    Amostragem nativa na leitura. `system` sorteia blocos inteiros (rápido,
+    granularidade grossa); `bernoulli`/`reservoir` sorteiam linha a linha
+    (mais uniformes, mais caros). Padrão de trabalho: desenvolver a
+    transformação na amostra, rodar no total só no final.
 
 Rode com: `uv run examples/08_ingestion_and_quality.py`
 """

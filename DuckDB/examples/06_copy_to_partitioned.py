@@ -1,15 +1,37 @@
 """Exemplo 6 — Escrevendo parquet particionado com COPY TO e recarga idempotente.
 
-Conceitos:
-- `COPY (query) TO 'dir' (FORMAT parquet, PARTITION_BY (...))` grava o
-  resultado de qualquer SELECT como um dataset parquet particionado
-  Hive-style — o equivalente SQL do `pyarrow.dataset.write_dataset`.
-- `OVERWRITE_OR_IGNORE` sobrescreve arquivos existentes de mesmo nome, o que
-  permite o padrão de ETL mais importante na prática: **recarga idempotente de
-  partição** — reprocessar só o mês que mudou, sem tocar nos demais.
-- `FILE_SIZE_BYTES` limita o tamanho de cada arquivo, quebrando partições
-  grandes em múltiplos parts (mesmo assunto do `max_rows_per_file` do pyarrow
-  usado no `rust-extension/run_etl.py`).
+Numa base transacional, o resultado de um processamento vira `INSERT INTO`
+outra tabela. No mundo data lake, vira **arquivos parquet** que outros motores
+lerão — e o `COPY ... TO` é o "INSERT em arquivo" do DuckDB.
+
+Comandos usados:
+
+`COPY (query) TO 'dir' (FORMAT parquet, PARTITION_BY (col), ...)`
+    Grava o resultado de QUALQUER SELECT como dataset parquet particionado
+    Hive-style (uma subpasta `col=valor/` por valor). É o equivalente SQL do
+    `pyarrow.dataset.write_dataset`. Note que `COPY` aqui não tem relação com
+    o `COPY` do Postgres (carga de CSV): é exportação estruturada.
+
+`OVERWRITE_OR_IGNORE`
+    Sobrescreve arquivos de mesmo nome no destino. Como os nomes gerados são
+    determinísticos, rodar o mesmo COPY filtrado por UMA partição substitui
+    só os arquivos daquela partição — o padrão de ETL mais importante na
+    prática: **recarga idempotente** (reprocessar o mês que mudou sem tocar
+    nos demais, e rodar 2x não duplica nada). Em bases transacionais o
+    idempotente análogo seria `DELETE WHERE mes = X` + `INSERT`, dentro de
+    uma transação.
+
+`FILE_SIZE_BYTES '16MB'`
+    Quebra a saída em múltiplos arquivos (`data_0.parquet`, `data_1...`) —
+    mesmo assunto do `max_rows_per_file` do pyarrow em
+    `rust-extension/run_etl.py`. O limite vale para o tamanho ANTES da
+    compressão e por thread, então os arquivos finais saem menores que o
+    nominal.
+
+`GROUP BY ALL`
+    Conveniência do DuckDB (não é SQL padrão): agrupa por TODAS as colunas
+    do SELECT que não são agregadas, dispensando repetir a lista. Elimina a
+    classe de erro "column must appear in the GROUP BY clause".
 
 Rode com: `uv run examples/06_copy_to_partitioned.py`
 """

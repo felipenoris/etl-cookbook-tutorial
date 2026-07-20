@@ -1,14 +1,30 @@
 """Exemplo 1 — Conectando e consultando com DuckDB.
 
-Conceitos:
-- `duckdb.connect()` sem argumento abre um banco em memória (equivalente a
-  `duckdb.connect(':memory:')`).
-- `con.sql(...)` devolve uma `DuckDBPyRelation` *lazy* — nada é executado até
-  você pedir o resultado (`.show()`, `.fetchall()`, `.df()`, `.arrow()`).
+Para quem vem de bases transacionais (Postgres/MySQL/SQL Server), o DuckDB
+inverte várias premissas — vale nomeá-las logo no primeiro exemplo:
+
+- **Não há servidor.** O banco roda *embutido* no processo Python (como o
+  SQLite), sem conexão de rede, usuário ou senha. `duckdb.connect()` sem
+  argumento abre um banco em memória (equivalente a
+  `duckdb.connect(':memory:')`), que desaparece no fim do processo.
+- **É colunar e vetorizado (OLAP), não orientado a linhas (OLTP).** O motor
+  foi desenhado para varrer/agregar milhões de linhas por segundo, não para
+  milhares de pequenas transações concorrentes. Por isso ele é ideal para
+  ETL analítico e ruim como banco de aplicação.
+- **Consulta arquivos diretamente.** `SELECT ... FROM read_parquet(glob)`
+  roda SQL direto sobre os arquivos parquet, sem `CREATE TABLE` + carga
+  prévia. Num banco tradicional, dados externos exigiriam import; aqui o
+  arquivo É a tabela ("schema-on-read").
+
+Sobre a API Python:
+- `con.sql(...)` devolve uma `DuckDBPyRelation` **lazy** — nada é executado
+  até você pedir o resultado (`.show()`, `.fetchall()`, `.df()`, `.arrow()`).
+  Isso permite compor/reaproveitar relações sem custo.
 - `con.execute(...)` segue o estilo DB-API (cursor), bom para comandos sem
   retorno tabular como `SET`/`PRAGMA`/`CREATE`.
-- DuckDB lê parquet diretamente com `read_parquet(glob)`, sem precisar
-  declarar uma tabela antes.
+- `CREATE VIEW nome AS SELECT ... FROM read_parquet(...)` registra um nome
+  amigável para o glob — as queries seguintes usam `FROM nome` como se fosse
+  tabela, mas os dados continuam nos arquivos.
 
 Rode com: `uv run examples/01_connecting_and_querying.py`
 """

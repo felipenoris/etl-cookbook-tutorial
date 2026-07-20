@@ -1,18 +1,34 @@
 """Exemplo 11 — EXPORT/IMPORT DATABASE e o contraste view vs. tabela materializada.
 
-Conceitos:
-- `EXPORT DATABASE 'dir' (FORMAT parquet)`: dump do banco inteiro para um
-  diretório — **um arquivo parquet por tabela**, mais `schema.sql` (DDLs de
-  tabelas e views) e `load.sql` (COPYs de recarga). É a única forma em que
-  "cada tabela vira um arquivo parquet individual" existe no DuckDB, e serve
-  para backup, migração entre máquinas e publicação do catálogo completo.
-- `IMPORT DATABASE 'dir'`: reconstrói o banco a partir do dump em qualquer
-  outra conexão/máquina.
-- **View vs. tabela materializada**: uma VIEW sobre parquet guarda só a query
-  (relê os arquivos a cada consulta — sempre atualizada, custo repetido);
-  um CTAS copia os dados para o storage interno do banco (leitura 1x — mais
-  rápido para consultar de novo, mas é um snapshot). O `EXPLAIN` denuncia a
-  diferença: `READ_PARQUET` num caso, `SEQ_SCAN` no outro.
+Fecha o mapa dos "lugares onde dados podem morar" no DuckDB: parquet externo,
+tabela interna, view — e o dump que converte um banco inteiro em arquivos.
+
+`EXPORT DATABASE 'dir' (FORMAT parquet)`
+    O pg_dump do DuckDB, com uma diferença importante: o dump é LEGÍVEL por
+    qualquer ferramenta — **um arquivo parquet por tabela**, mais `schema.sql`
+    (DDLs de tabelas e views) e `load.sql` (COPYs de recarga). Serve para
+    backup, migração entre máquinas e publicação do catálogo completo; e é a
+    única forma em que "cada tabela vira um arquivo parquet individual"
+    existe no DuckDB (views não viram parquet — só a definição vai no
+    schema.sql).
+
+`IMPORT DATABASE 'dir'`
+    Reconstrói tabelas E views a partir do dump, em qualquer conexão/máquina
+    — basta o diretório.
+
+**View vs. tabela materializada** (o mesmo dilema de views vs. materialized
+views em bases tradicionais — o DuckDB não tem `MATERIALIZED VIEW`; o CTAS
+cumpre esse papel, com atualização por reprocessamento):
+    - `CREATE VIEW v AS SELECT ... FROM read_parquet(...)`: guarda só a
+      QUERY; cada consulta relê os arquivos — sempre atualizada, custo
+      repetido.
+    - `CREATE TABLE t AS SELECT ...`: copia os dados para o storage interno
+      do banco — leitura do parquet 1x, consultas seguintes mais baratas,
+      mas é um snapshot (não vê arquivos novos).
+    O `EXPLAIN` denuncia a fonte de cada um: `READ_PARQUET` na view,
+    `SEQ_SCAN` (scan do storage interno) na tabela. Com parquet local e
+    partition pruning a diferença de tempo é pequena; ela cresce com storage
+    remoto (S3) ou quando a view encapsula query pesada.
 
 Rode com: `uv run examples/11_export_import_and_views_vs_tables.py`
 """

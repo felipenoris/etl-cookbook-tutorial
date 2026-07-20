@@ -1,16 +1,35 @@
 """Exemplo 10 — Macros SQL e UDFs Python (linha a linha e vetorizada via Arrow).
 
-Conceitos:
-- `CREATE MACRO` (escalar): encapsula uma expressão SQL reutilizável — o
-  "função" do mundo SQL, expandida inline pelo otimizador (custo zero).
-- `CREATE MACRO ... AS TABLE`: macro de tabela parametrizada — uma "view com
-  argumentos", ótima para padronizar leituras parametrizadas (ex.: pedidos de
-  um mês de referência).
-- `con.create_function(...)`: registra uma função **Python** para uso dentro
-  do SQL. No modo padrão (`type="native"`) ela é chamada linha a linha —
-  flexível, porém lenta. Com `type="arrow"`, recebe/devolve **vetores Arrow**
-  (chunks), reduzindo drasticamente o overhead — mesma filosofia zero-copy da
-  extensão Rust do tutorial (`../rust-extension`).
+Como encapsular lógica reutilizável — o papel que stored procedures e
+functions cumprem numa base transacional. O DuckDB não tem stored procedures;
+tem dois mecanismos mais simples, cada um com seu lugar:
+
+`CREATE MACRO nome(args) AS expressão`
+    Macro **escalar**: um nome para uma expressão SQL. Diferente de uma
+    function de banco tradicional (que é chamada em runtime), a macro é
+    expandida INLINE pelo otimizador antes de executar — custo zero, como um
+    `#define`. Limitação correspondente: é uma expressão única, sem corpo
+    procedural (sem loops/variáveis).
+
+`CREATE MACRO nome(args) AS TABLE SELECT ...`
+    Macro de **tabela**: uma "view com parâmetros" — `FROM pedidos_do_mes(3)`.
+    Views não aceitam argumentos em nenhum banco; a macro de tabela resolve
+    exatamente isso, e é ótima para padronizar leituras parametrizadas
+    (mês de referência, cliente, cenário) entre etapas do ETL.
+
+`con.create_function(nome, fn_python, [tipos], tipo_retorno)`
+    Registra uma função **Python** chamável de dentro do SQL — o análogo de
+    criar uma UDF no servidor, exceto que aqui "o servidor" é o seu processo.
+    No modo default a função é chamada UMA VEZ POR LINHA, com o custo de
+    atravessar a fronteira SQL->Python milhões de vezes: flexível, lento.
+
+`con.create_function(..., type="arrow")`
+    A variante que importa em ETL: a função recebe/devolve **vetores Arrow**
+    (um chunk de milhares de linhas por chamada), e o corpo roda vetorizado
+    (`pyarrow.compute`, C++). O placar do exemplo: 5.6M de linhas em ~0.5s —
+    a versão linha a linha levaria minutos. É a mesma filosofia da extensão
+    Rust do tutorial (`../rust-extension`): atravessar a fronteira POR LOTE,
+    nunca por linha.
 
 Rode com: `uv run examples/10_macros_and_python_udfs.py`
 """

@@ -1,17 +1,33 @@
 """Exemplo 4 — Configurando memory_limit e spill para disco (temp_directory).
 
-Conceitos:
-- Por padrão o DuckDB usa até ~80% da RAM da máquina. `SET memory_limit='150MB'`
-  reduz drasticamente esse teto — bem menor que os ~265MB do dataset de orders
-  (33.7M linhas) já compactado em parquet, e bem menor ainda que o tamanho
-  descomprimido em memória.
-- `SET temp_directory='...'` diz ao DuckDB onde gravar os buffers que não
-  cabem no `memory_limit`. Um `ORDER BY` sobre a tabela inteira precisa manter
-  (numa primeira leitura) todas as linhas para ordenar — se isso não cabe na
-  RAM configurada, o DuckDB grava blocos intermediários em disco (spill) em
-  vez de falhar com erro de memória.
-- Sem `temp_directory` configurado (ou com `memory_limit` alto o bastante), a
-  mesma operação simplesmente roda inteira em RAM.
+Numa base transacional, "não caber na memória" raramente é problema do usuário:
+o servidor gerencia buffer pool e a query, no pior caso, fica lenta. No DuckDB
+embutido, quem dimensiona a memória é você — e a pergunta "e se o dataset for
+maior que a RAM?" tem resposta configurável: **spill** (derramar blocos
+intermediários para disco), o mecanismo que permite ao DuckDB processar
+datasets maiores que a memória disponível.
+
+Comandos usados (todos via `SET`, válidos para a conexão):
+
+`SET memory_limit='150MB'`
+    Teto de memória do motor. O default é ~80% da RAM da máquina; aqui
+    forçamos um valor bem menor que o dataset de orders (33.7M linhas,
+    ~265MB só em parquet comprimido) exatamente para provocar o spill.
+
+`SET temp_directory='...'`
+    Onde gravar os blocos que não couberem no teto. Um `ORDER BY` da tabela
+    inteira precisa (numa primeira fase) de todas as linhas para ordenar —
+    quando isso estoura o `memory_limit`, o DuckDB grava "runs" parciais em
+    disco e as intercala no final (external sort, o mesmo algoritmo clássico
+    de fita), em vez de falhar com out-of-memory. Joins e agregações grandes
+    fazem o análogo com partições de hash.
+
+`SET preserve_insertion_order=false`
+    Por default, o DuckDB garante que resultados sem `ORDER BY` saiam na
+    ordem dos arquivos de origem — garantia que custa memória e limita o
+    paralelismo. Em ETL analítico essa ordem raramente importa; desligá-la
+    libera o motor para reordenar/spillar à vontade. (Se a ordem importa,
+    a resposta certa é um `ORDER BY` explícito, nunca a ordem implícita.)
 
 Rode com: `uv run examples/04_memory_limit_and_spill.py`
 """
