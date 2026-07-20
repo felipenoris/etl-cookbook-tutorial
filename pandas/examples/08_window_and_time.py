@@ -18,27 +18,26 @@ from _common import load_orders, section
 if __name__ == "__main__":
     orders = load_orders([1])
 
-    section("Receita diária (convertendo order_date para datetime64[ns])")
+    section("Quantidade vendida por dia (convertendo order_date para datetime64[ns])")
     orders = orders.copy()
     orders["order_date_ts"] = orders["order_date"].astype("date32[pyarrow]").astype("datetime64[ns]")
-    receita_diaria = (
-        orders.assign(receita=orders["quantity"])
-        .groupby("order_date_ts")["receita"]
+    qtd_diaria = (
+        orders.groupby("order_date_ts")["quantity"]
         .sum()
         .sort_index()
     )
-    print(receita_diaria.head(5))
+    print(qtd_diaria.head(5))
 
     section("resample: agregando por período de 3 dias")
-    por_3_dias = receita_diaria.resample("3D").sum()
+    por_3_dias = qtd_diaria.resample("3D").sum()
     print(por_3_dias.head(5))
 
-    section("rolling: média móvel de 3 dias sobre a receita diária")
-    media_movel = receita_diaria.rolling(window=3).mean()
+    section("rolling: média móvel de 3 dias sobre a quantidade diária")
+    media_movel = qtd_diaria.rolling(window=3).mean()
     print(media_movel.head(6))
 
     section("cumsum: quantidade acumulada ao longo do tempo")
-    print(receita_diaria.cumsum().head(5))
+    print(qtd_diaria.cumsum().head(5))
 
     section("cumcount por grupo: número sequencial do pedido de cada cliente")
     orders_sorted = orders.sort_values(["customer_id", "order_date_ts"])

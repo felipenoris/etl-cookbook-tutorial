@@ -176,10 +176,14 @@ uv run pytest -m "not slow"   # rápido: funções Rust + etapas do ETL com dado
 uv run pytest                 # inclui o pipeline completo sobre data/raw (~15s)
 ```
 
-`tests/test_rust_extension.py` exercita as duas funções Rust com RecordBatches
-pequenos (valores calculados, propagação de nulos, erro para coluna ausente).
-`tests/test_run_etl.py` testa cada etapa do pipeline isoladamente e, no teste
-marcado `slow`, roda o ETL inteiro gravando num diretório temporário.
+`tests/test_rust_extension.py` exercita `add_line_total` e
+`compute_customer_running_spend` com RecordBatches pequenos (valores
+calculados, propagação de nulos, erro para coluna ausente).
+`tests/test_parallel_projection.py` cobre `project_revenue_batch` e o
+`ParallelRevenueProjector` (resultado consolidado igual ao serial, ordem de
+submissão, erros de schema na submissão). `tests/test_run_etl.py` testa cada
+etapa do pipeline isoladamente e, no teste marcado `slow`, roda o ETL inteiro
+gravando num diretório temporário.
 
 ## Referências
 

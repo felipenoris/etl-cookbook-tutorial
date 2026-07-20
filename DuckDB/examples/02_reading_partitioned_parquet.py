@@ -12,9 +12,12 @@ Comandos usados:
     O glob (`orders/**/*.parquet`) descobre os arquivos; a flag faz o DuckDB
     reconstruir `order_year`/`order_month` como colunas do resultado a partir
     do caminho. Sem a flag, essas colunas simplesmente não existem no schema.
-    Atenção a um detalhe de tipos: as colunas de partição chegam como VARCHAR
-    (vêm de nomes de diretório) — igualdade com inteiro (`= 1`) funciona por
-    cast implícito, mas comparações de faixa (`<=`) pedem CAST explícito.
+    Atenção a um detalhe de tipos: o DuckDB tenta inferir o tipo do valor da
+    partição, mas só quando isso não perde informação. `order_year=2025` vira
+    BIGINT; já `order_month=01` fica VARCHAR — o zero à esquerda seria perdido
+    num inteiro, então o DuckDB mantém a string. Consequência prática: filtrar
+    `order_month` por igualdade com inteiro (`= 1`) funciona por cast
+    implícito, mas comparações de faixa (`<=`) pedem CAST explícito.
 
 **Partition pruning** — o equivalente data-lake do "index scan"
     Quando o filtro usa uma coluna de partição (`WHERE order_month = 1`), o

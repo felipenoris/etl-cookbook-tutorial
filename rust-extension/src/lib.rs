@@ -1,11 +1,19 @@
 //! Extensão Rust (PyO3 + pyo3-arrow) usada pelo ETL em `run_etl.py`.
 //!
-//! As duas funções expostas recebem e devolvem `pyarrow.RecordBatch` diretamente,
-//! sem copiar os buffers de dados: a entrada chega via a Arrow C Data Interface
-//! (protocolo `__arrow_c_array__`, que o `pyo3-arrow` reconhece em qualquer
-//! objeto Python compatível — pyarrow, arro3, polars, etc.), e a saída é
-//! reconstruída em cima dos mesmos `Arc<dyn Array>` de entrada mais as colunas
-//! novas calculadas em Rust.
+//! Todas as funções recebem e devolvem `pyarrow.RecordBatch` diretamente, sem
+//! copiar os buffers de dados na entrada: o batch chega via a Arrow C Data
+//! Interface (protocolo `__arrow_c_array__`, que o `pyo3-arrow` reconhece em
+//! qualquer objeto Python compatível — pyarrow, arro3, polars, etc.).
+//!
+//! O que é exposto ao Python:
+//!
+//! - `add_line_total` e `compute_customer_running_spend`: enriquecem o batch —
+//!   a saída **reaproveita os mesmos `Arc<dyn Array>` de entrada** e acrescenta
+//!   as colunas novas calculadas em Rust (só as colunas novas são alocadas).
+//! - `project_revenue_batch` e a classe `ParallelRevenueProjector`: projetam
+//!   um resultado **novo** (`id_contrato`, `receita_projetada`), sem carregar
+//!   as colunas de entrada adiante — o `ParallelRevenueProjector` distribui os
+//!   lotes entre threads (ver a doc da própria classe).
 //!
 //! # Sobre o tipo de retorno das funções (`Py<PyAny>` vs `PyRecordBatch`)
 //!
