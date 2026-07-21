@@ -42,9 +42,13 @@ rm -rf DuckDB/examples/_tmp_spill rust-extension/_tmp_spill
 echo "ok"
 
 if $DEEP; then
-    step extra "Ambientes virtuais (--all): removendo os .venv"
-    rm -rf pandas/.venv pyarrow/.venv DuckDB/.venv rust-extension/.venv sqlalchemy-contract/.venv
-    echo "removidos (o próximo uv run/uv sync recria cada um)"
+    step extra "Ambientes virtuais e lockfiles (--all): estado pós-clone completo"
+    # o uv.lock é gitignored (não existe num clone novo); removê-lo junto do
+    # .venv faz o --all reproduzir fielmente um repositório recém-clonado
+    for proj in pandas pyarrow DuckDB rust-extension sqlalchemy-contract; do
+        rm -rf "$proj/.venv" "$proj/uv.lock"
+    done
+    echo "removidos .venv + uv.lock (o próximo uv sync re-resolve e recria cada um)"
 fi
 
 printf '\n\033[1;32mLimpo!\033[0m Restaure tudo com ./check_all.sh\n'

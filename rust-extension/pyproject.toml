@@ -9,7 +9,7 @@ description = "ETL com extensão Rust (PyO3 + pyo3-arrow) sobre orders/customers
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "duckdb>=1.1",
+    "duckdb>=1.5.4",
     "pyarrow>=17",
     "pandas>=3.0.3",
 ]

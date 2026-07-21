@@ -11,7 +11,7 @@ import pytest
 
 from conftest import EXAMPLES_DIR, PROJECT_ROOT
 
-EXAMPLE_SCRIPTS = sorted(EXAMPLES_DIR.glob("0*.py"))
+EXAMPLE_SCRIPTS = sorted(EXAMPLES_DIR.glob("[0-9]*.py"))
 
 
 @pytest.mark.parametrize("script", EXAMPLE_SCRIPTS, ids=lambda p: p.name)

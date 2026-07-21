@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Verificação completa do repositório em um comando.
 #
-# Executa, em sequência: geração dos dados fictícios (se necessário), as 4
+# Executa, em sequência: geração dos dados fictícios (se necessário), as 5
 # suítes pytest (cujos smoke tests executam TODOS os scripts de examples/),
-# os dois pipelines do rust-extension e a geração das documentações (pdoc e
-# cargo doc). Qualquer falha interrompe o script com erro.
+# os 3 scripts standalone do rust-extension (run_etl, run_contracts_parallel,
+# run_data_types) e a geração das documentações (doctest + pdoc + cargo doc).
+# Qualquer falha interrompe o script com erro.
 #
 # Uso:
 #   ./check_all.sh                # verificação completa (3 testes usam internet)
@@ -33,13 +34,13 @@ else
     uv run data/generate_data.py --generate
 fi
 
-step 2/9 "pandas: suíte pytest (os smoke tests executam os 8 exemplos)"
+step 2/9 "pandas: suíte pytest (os smoke tests executam os 9 exemplos)"
 (cd pandas && uv run pytest)
 
-step 3/9 "pyarrow: suíte pytest (9 exemplos)"
+step 3/9 "pyarrow: suíte pytest (10 exemplos)"
 (cd pyarrow && uv run pytest)
 
-step 4/9 "DuckDB: suíte pytest (13 exemplos)"
+step 4/9 "DuckDB: suíte pytest (14 exemplos)"
 (cd DuckDB && uv run pytest $DUCKDB_FLAGS)
 
 step 5/9 "rust-extension: suíte pytest (compila a extensão via maturin no 1º uso)"
@@ -55,7 +56,8 @@ step 7/9 "Projeção paralela de contratos + tipos Arrow no Rust"
 step 8/9 "sqlalchemy-contract: suíte pytest (contrato + ORM vs colunar + hierarquia)"
 (cd sqlalchemy-contract && uv run pytest)
 
-step 9/9 "Documentação: pdoc (docs/) e cargo doc (target/doc/)"
+step 9/9 "Documentação: doctest do docs_demo, pdoc (docs/) e cargo doc (target/doc/)"
+(cd rust-extension && uv run python -m doctest docs_demo.py -v > /dev/null)
 (cd rust-extension && uv run pdoc --math --mermaid --docformat google --output-dir docs \
     etl_rust_ext ./run_etl.py ./run_contracts_parallel.py ./run_data_types.py ./docs_demo.py)
 (cd rust-extension && cargo doc --no-deps --document-private-items)

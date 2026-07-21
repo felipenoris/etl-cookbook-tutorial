@@ -79,9 +79,10 @@ Para rodar o `./check_all.sh` (e o repositório em geral), a máquina precisa de
    --no-network` os pula.
 4. **bash** — os scripts `check_all.sh`/`clean_all.sh` são shell scripts
    (macOS e Linux funcionam direto; no Windows, use WSL ou Git Bash).
-5. **~2.5GB de disco livre** — dados fictícios gerados (~1.5GB em
-   `data/raw` + `data/rich`), um `.venv` por projeto (~200-250MB cada) e o
-   build Rust (~120MB). O `./clean_all.sh` recupera esse espaço.
+5. **~2.7GB de disco livre** — dados fictícios gerados (~1.5GB em
+   `data/raw` + `data/rich`), um `.venv` por projeto (5 projetos,
+   ~200-250MB cada) e o build Rust (~130MB). O `./clean_all.sh` recupera
+   esse espaço.
 
 Nada além disso: sem servidor de banco, sem Docker, sem credenciais — os
 exemplos de S3 usam buckets públicos com acesso anônimo.
@@ -138,9 +139,10 @@ Observações que os exemplos demonstram na prática:
 
 ## Verificação completa com um comando
 
-Acabou de clonar? Um único comando gera os dados, roda as 4 suítes de testes
+Acabou de clonar? Um único comando gera os dados, roda as 5 suítes de testes
 (cujos smoke tests executam **todos** os scripts de `examples/`), executa os
-dois pipelines do `rust-extension` e gera as documentações (pdoc e cargo doc):
+scripts standalone do `rust-extension` e gera as documentações (doctest, pdoc
+e cargo doc):
 
 ```bash
 ./check_all.sh                # completo (3 testes do DuckDB usam internet)
@@ -155,7 +157,7 @@ Rust, caches), voltando ao estado pós-clone:
 
 ```bash
 ./clean_all.sh          # limpa artefatos gerados (mantém os .venv)
-./clean_all.sh --all    # também remove os .venv
+./clean_all.sh --all    # também remove os .venv e uv.lock (estado pós-clone)
 ```
 
 ## Por onde começar
@@ -178,6 +180,11 @@ Rust, caches), voltando ao estado pós-clone:
    DuckDB (extract+join+spill) → pyarrow (projeção) → Rust via `pyo3-arrow`
    (transformação com estado, zero-copy) → pandas (resumo) → grava em
    `data/rich/order_metrics/`.
+5. [`sqlalchemy-contract/`](sqlalchemy-contract) — para equipes vindas do
+   padrão ORM + banco relacional efêmero: modelos SQLAlchemy no papel de
+   contrato de schema (não de veículo de dados), a medição do custo do ORM
+   no caminho massivo (ORM vs. colunar) e a árvore de plano de contas
+   resolvida com `WITH RECURSIVE` no DuckDB.
 
 Cada subpasta tem seu próprio `README.md` com a lista de exemplos e os
 conceitos exercitados.
