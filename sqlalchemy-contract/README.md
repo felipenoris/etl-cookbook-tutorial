@@ -28,6 +28,7 @@ RelacionamentoContaHierarquia, Lancamento) com três mudanças deliberadas:
 | `01_models_as_contract.py` | um schema, três projeções: `create_all` (banco local), `arrow_schema_for` (field metadata no parquet), `redshift_ddl_for` (`CREATE TABLE` + `COMMENT ON`) |
 | `02_orm_vs_columnar.py` | a medição que motiva a migração: ORM vs Core vs Arrow→parquet→DuckDB CTAS, com linhas/s de cada caminho |
 | `03_account_hierarchy.py` | a árvore de contas (arestas parent→child por hierarquia) via `WITH RECURSIVE` no DuckDB, filtro por subárvore, N visões sobre as mesmas contas, FKs como queries de qualidade |
+| `04_orm_vs_batch.py` | o gradiente ORM → lote em Python puro: lazy loading (N+1), eager loading, linhas brutas e agregação vetorizada no DuckDB |
 
 ```bash
 cd sqlalchemy-contract
@@ -35,6 +36,7 @@ uv sync
 uv run examples/01_models_as_contract.py
 uv run examples/02_orm_vs_columnar.py          # aceita [n_linhas], default 100000
 uv run examples/03_account_hierarchy.py
+uv run examples/04_orm_vs_batch.py       # aceita [n_contas] [lanc_por_conta]
 ```
 
 ## O placar do exemplo 02 (100k lançamentos, SQLite em memória)
@@ -47,9 +49,56 @@ uv run examples/03_account_hierarchy.py
 
 O SQLite em memória é o cenário MAIS favorável ao ORM (sem rede, sem fsync);
 contra um Postgres real a diferença só cresce. A lentidão não é má
-configuração: o ORM paga um objeto Python + rastreamento de estado (unit of
-work) POR LINHA. No caminho colunar o fato nunca vira objeto — só buffers
-Arrow.
+configuração — é a soma dos cinco custos descritos na próxima seção: o ORM
+paga metadados de objeto (1), escrituração da session (2) e serialização por
+linha (3) em cada `Lancamento`. O `insert()` do Core corta 1 e 2, mas segue
+orientado a linha; só o caminho colunar elimina os cinco, porque o fato nunca
+vira objeto — são buffers Arrow do início ao fim.
+
+## Por que o ORM é lento: os cinco custos
+
+A lentidão do ORM não vem de "materializar objetos" em abstrato, mas de cinco
+custos distintos. Vale nomeá-los, porque cada estratégia do exemplo 04 elimina
+um subconjunto deles — e porque é o mesmo arcabouço usado no [estudo
+equivalente em Rust](../rust-extension/run_nested_params.py):
+
+| # | Custo do ORM | Onde aparece |
+| --- | --- | --- |
+| 1 | **Metadados por linha em runtime** — cada instância é um `PyObject` com refcount, `__dict__` e rastreamento de GC (centenas de bytes de overhead por objeto) | qualquer query que devolva objetos |
+| 2 | **Escrituração do ORM** — identity map, unit of work, atributos instrumentados (todo acesso passa por *descriptors* que registram estado), lazy loading | sessions com objetos rastreados |
+| 3 | **Travessia de fronteira por linha (ou por entidade)** — cada ida ao banco é um round trip; o flush serializa linha a linha pelo protocolo | INSERT massivo; o N+1 do lazy loading |
+| 4 | **Execução interpretada** — cada operação é dispatch de bytecode | todo laço Python sobre linhas |
+| 5 | **Alocação de heap por linha** | criar objetos/listas por registro |
+
+A observação central do estudo em Rust: **quatro desses cinco custos
+desaparecem só por sair do Python** — sobra a alocação (~100x mais barata, e
+evitável emprestando fatias sobre os buffers Arrow). É por isso que a mesma
+lição "não processe linha a linha" custa ~4x lá e duas ordens de grandeza
+aqui.
+
+## O gradiente do exemplo 04 (200k lançamentos, agregação por conta)
+
+O exemplo 02 mede a **escrita** (INSERT); o 04 mede a **leitura +
+processamento**, que é onde o ETL passa a maior parte do tempo. Quatro
+estratégias calculando a mesma coisa (maior saldo acumulado por conta), cada
+degrau eliminando custos da tabela acima:
+
+| Estratégia | Tempo | Ganho acumulado | Custos que o degrau elimina |
+| --- | --- | --- | --- |
+| 1. ORM lazy loading (N+1) | ~9,7s | 1x | — (paga todos os cinco) |
+| 2. ORM eager (`selectinload`) | ~2,4s | **~4x** | **3** — as N idas ao banco |
+| 3. Linhas brutas + laço Python | ~0,3s | **~33x** | **1 e 2** — objetos e escrituração |
+| 4. Lote colunar (DuckDB) | ~0,04s | **~258x** | **4 e 5** — laço interpretado e alocação |
+
+Nenhum degrau é o vilão sozinho: o N+1 custa 4x, os objetos ORM mais 8x, e o
+laço interpretado mais 7x. Note que os degraus 2 e 3 são exatamente os custos
+que o ORM adiciona; o degrau 4 é o custo do **Python** — e por isso ele só sai
+indo para um motor vetorizado (ou para o Rust, como no estudo equivalente).
+
+**Ressalva**: com pouco volume (~15k linhas) a estratégia 4 fica *mais lenta*
+que a 3 — o custo fixo do DuckDB (conexão, planejamento) não se paga. A
+vantagem colunar precisa de volume; não vale trocar um laço Python por um
+motor SQL para mil linhas.
 
 ## Onde cada peça do padrão antigo foi parar
 
@@ -165,12 +214,14 @@ troca costuma compensar — mas é uma troca, não um almoço grátis.
 uv run pytest
 ```
 
-Smoke tests dos 3 exemplos + testes das projeções do contrato (tipos Arrow,
+Smoke tests dos 4 exemplos + testes das projeções do contrato (tipos Arrow,
 DDL com `COMMENT ON`, comprimentos de VARCHAR), da equivalência de resultados
 entre o caminho ORM e o colunar (mesmo COUNT e mesma SOMA decimal, igualdade
 estrita), da CTE recursiva (caminhos completos, filtro por subárvore,
-hierarquia alternativa independente) e do anti-join pegando lançamentos
-órfãos.
+hierarquia alternativa independente), do anti-join pegando lançamentos
+órfãos e das quatro estratégias do exemplo 04 (as quatro contra um cenário
+determinístico calculado à mão, incluindo saldo que nunca fica positivo e
+contas sem lançamentos).
 
 ## Referências
 

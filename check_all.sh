@@ -54,7 +54,7 @@ step 7/9 "Projeção paralela, tipos Arrow e materialização 1:N no Rust"
 (cd rust-extension && uv run run_data_types.py)
 (cd rust-extension && uv run run_nested_params.py)
 
-step 8/9 "sqlalchemy-contract: suíte pytest (contrato + ORM vs colunar + hierarquia)"
+step 8/9 "sqlalchemy-contract: suíte pytest (contrato, ORM vs colunar/lote, hierarquia)"
 (cd sqlalchemy-contract && uv run pytest)
 
 step 9/9 "Documentação: doctest do docs_demo, pdoc (docs/) e cargo doc (target/doc/)"

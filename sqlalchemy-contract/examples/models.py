@@ -28,7 +28,7 @@ from decimal import Decimal
 
 import pyarrow as pa
 from sqlalchemy import ForeignKey, Numeric, String, UniqueConstraint
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql import sqltypes
 
 
@@ -68,6 +68,12 @@ class Conta(Base):
         default=True, comment="False para contas sintéticas (só agregam filhas)"
     )
 
+    # Relacionamento 1:N usado pelo exemplo 04 para demonstrar a navegação do
+    # ORM (`conta.lancamentos`). Não afeta as projeções do contrato: tanto
+    # `arrow_schema_for` quanto `redshift_ddl_for` iteram `__table__.columns`,
+    # e relacionamentos não são colunas.
+    lancamentos: Mapped[list["Lancamento"]] = relationship(back_populates="conta")
+
 
 class RelacionamentoContaHierarquia(Base):
     __tablename__ = "rel_contas_hierarquias"
@@ -101,6 +107,7 @@ class Lancamento(Base):
     id_conta: Mapped[int] = mapped_column(
         ForeignKey("cad_contas.id_conta"), comment="FK da conta (folha) lançada"
     )
+    conta: Mapped["Conta"] = relationship(back_populates="lancamentos")
     data: Mapped[date] = mapped_column(index=True, comment="Data contábil do lançamento")
     valor: Mapped[Decimal] = mapped_column(
         Numeric(12, 2), comment="Valor em BRL, 2 casas decimais (era Double no modelo antigo)"

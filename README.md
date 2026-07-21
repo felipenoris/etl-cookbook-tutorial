@@ -186,9 +186,11 @@ Rust, caches), voltando ao estado pós-clone:
    estudo de **materialização de dados 1:N** (copiar vs. emprestar fatias).
 5. [`sqlalchemy-contract/`](sqlalchemy-contract) — para equipes vindas do
    padrão ORM + banco relacional efêmero: modelos SQLAlchemy no papel de
-   contrato de schema (não de veículo de dados), a medição do custo do ORM
-   no caminho massivo (ORM vs. colunar) e a árvore de plano de contas
-   resolvida com `WITH RECURSIVE` no DuckDB.
+   contrato de schema (não de veículo de dados), a decomposição dos **cinco
+   custos** que tornam o ORM lento, medidos na escrita (ORM vs. Core vs.
+   colunar) e na leitura (o gradiente lazy loading → eager → linhas brutas →
+   lote vetorizado), e a árvore de plano de contas resolvida com
+   `WITH RECURSIVE` no DuckDB.
 
 Cada subpasta tem seu próprio `README.md` com a lista de exemplos e os
 conceitos exercitados.
