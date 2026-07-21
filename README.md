@@ -17,6 +17,7 @@ etl-cookbook-tutorial/
   pyarrow/             # API nativa do pyarrow
   DuckDB/              # SQL em memória sobre parquet, com spill configurável
   rust-extension/      # extensão Rust (PyO3 + pyo3-arrow) + ETL completo + docs (pdoc)
+  sqlalchemy-contract/ # migração do padrão ORM: modelos como contrato, ORM vs colunar, árvore de contas
 ```
 
 ## Mapa de objetivos
@@ -191,6 +192,7 @@ unitários dos contratos assumidos). Para rodar tudo, a partir da raiz:
 (cd pyarrow && uv run pytest)
 (cd DuckDB && uv run pytest)
 (cd rust-extension && uv run pytest)   # -m "not slow" pula o pipeline completo
+(cd sqlalchemy-contract && uv run pytest)
 ```
 
 ## Referências

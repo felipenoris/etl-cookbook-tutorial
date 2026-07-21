@@ -26,33 +26,36 @@ fi
 
 step() { printf '\n\033[1m==> [%s] %s\033[0m\n' "$1" "$2"; }
 
-step 1/8 "Dados fictícios em data/raw"
+step 1/9 "Dados fictícios em data/raw"
 if [[ -d data/raw/orders ]]; then
     echo "data/raw já existe — pulando (regenere com: uv run data/generate_data.py --clean --generate)"
 else
     uv run data/generate_data.py --generate
 fi
 
-step 2/8 "pandas: suíte pytest (os smoke tests executam os 8 exemplos)"
+step 2/9 "pandas: suíte pytest (os smoke tests executam os 8 exemplos)"
 (cd pandas && uv run pytest)
 
-step 3/8 "pyarrow: suíte pytest (9 exemplos)"
+step 3/9 "pyarrow: suíte pytest (9 exemplos)"
 (cd pyarrow && uv run pytest)
 
-step 4/8 "DuckDB: suíte pytest (13 exemplos)"
+step 4/9 "DuckDB: suíte pytest (13 exemplos)"
 (cd DuckDB && uv run pytest $DUCKDB_FLAGS)
 
-step 5/8 "rust-extension: suíte pytest (compila a extensão via maturin no 1º uso)"
+step 5/9 "rust-extension: suíte pytest (compila a extensão via maturin no 1º uso)"
 (cd rust-extension && uv run pytest)
 
-step 6/8 "ETL completo (DuckDB -> pyarrow -> Rust -> pandas -> parquet)"
+step 6/9 "ETL completo (DuckDB -> pyarrow -> Rust -> pandas -> parquet)"
 (cd rust-extension && uv run run_etl.py)
 
-step 7/8 "Projeção paralela de contratos + tipos Arrow no Rust"
+step 7/9 "Projeção paralela de contratos + tipos Arrow no Rust"
 (cd rust-extension && uv run run_contracts_parallel.py)
 (cd rust-extension && uv run run_data_types.py)
 
-step 8/8 "Documentação: pdoc (docs/) e cargo doc (target/doc/)"
+step 8/9 "sqlalchemy-contract: suíte pytest (contrato + ORM vs colunar + hierarquia)"
+(cd sqlalchemy-contract && uv run pytest)
+
+step 9/9 "Documentação: pdoc (docs/) e cargo doc (target/doc/)"
 (cd rust-extension && uv run pdoc --math --mermaid --docformat google --output-dir docs \
     etl_rust_ext ./run_etl.py ./run_contracts_parallel.py ./run_data_types.py ./docs_demo.py)
 (cd rust-extension && cargo doc --no-deps --document-private-items)

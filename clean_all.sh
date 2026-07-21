@@ -43,7 +43,7 @@ echo "ok"
 
 if $DEEP; then
     step extra "Ambientes virtuais (--all): removendo os .venv"
-    rm -rf pandas/.venv pyarrow/.venv DuckDB/.venv rust-extension/.venv
+    rm -rf pandas/.venv pyarrow/.venv DuckDB/.venv rust-extension/.venv sqlalchemy-contract/.venv
     echo "removidos (o próximo uv run/uv sync recria cada um)"
 fi
 
