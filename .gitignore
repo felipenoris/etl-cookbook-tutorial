@@ -6,8 +6,11 @@ __pycache__/
 *.egg-info/
 dist/
 
-# Lockfiles do uv (padrão adotado neste projeto: não versionar)
+# Lockfiles (padrão adotado neste projeto: não versionar).
+# Cargo.lock: esta extensão é uma library (cdylib), e a convenção do Rust é
+# não versionar o lock de libraries.
 uv.lock
+Cargo.lock
 
 # Artefatos de build do Rust / maturin
 target/

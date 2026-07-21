@@ -43,12 +43,13 @@ echo "ok"
 
 if $DEEP; then
     step extra "Ambientes virtuais e lockfiles (--all): estado pós-clone completo"
-    # o uv.lock é gitignored (não existe num clone novo); removê-lo junto do
-    # .venv faz o --all reproduzir fielmente um repositório recém-clonado
+    # uv.lock e Cargo.lock são gitignored (não existem num clone novo);
+    # removê-los junto do .venv faz o --all reproduzir um clone recém-feito
     for proj in pandas pyarrow DuckDB rust-extension sqlalchemy-contract; do
         rm -rf "$proj/.venv" "$proj/uv.lock"
     done
-    echo "removidos .venv + uv.lock (o próximo uv sync re-resolve e recria cada um)"
+    rm -f rust-extension/Cargo.lock
+    echo "removidos .venv + uv.lock + Cargo.lock (o próximo build re-resolve tudo)"
 fi
 
 printf '\n\033[1;32mLimpo!\033[0m Restaure tudo com ./check_all.sh\n'
