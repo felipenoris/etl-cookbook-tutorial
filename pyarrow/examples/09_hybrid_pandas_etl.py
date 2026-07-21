@@ -1,6 +1,6 @@
 """Exemplo 9 — Padrão híbrido: pyarrow nas bordas, pandas no miolo (streaming).
 
-Este é o desenho recomendado quando a equipe é proficiente em pandas mas os
+Este é o desenho recomendado quando há proficiência em pandas mas os
 dados não cabem (ou não deveriam passar inteiros) pela memória:
 
     pyarrow.dataset  ->  RecordBatch  ->  pandas (lógica de negócio)  ->  pyarrow  ->  parquet
@@ -38,7 +38,7 @@ OUT_DIR = REPO_ROOT / "data" / "rich" / "pyarrow_hybrid_demo"
 
 
 def regra_de_negocio(df: pd.DataFrame) -> pd.DataFrame:
-    """A transformação que a equipe escreve — pandas puro, sem pyarrow à vista.
+    """A transformação de negócio — pandas puro, sem pyarrow à vista.
 
     Marca pedidos urgentes (quantidade alta ainda não enviada) e deriva a
     semana do mês; qualquer lógica pandas funciona aqui.

@@ -44,7 +44,7 @@ if __name__ == "__main__":
     print(redshift_ddl_for(Conta))
 
     section("O ponto da migração")
-    print("O contrato continua sendo as classes que a equipe já escreve.")
+    print("O contrato continua sendo as mesmas classes declarativas de sempre.")
     print("O que muda: o fato NUNCA vira lista de instâncias ORM — ele viaja")
     print("como Arrow/parquet (exemplo 02 mede o porquê), e o banco efêmero")
     print("vira DuckDB in-process (exemplo 03 resolve a árvore de contas lá).")

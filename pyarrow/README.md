@@ -35,18 +35,18 @@ uv run examples/01_reading_partitioned_datasets.py
 O interop pyarrow <-> pandas com backend Arrow é **zero-copy nos dois
 sentidos** — um DataFrame `ArrowDtype` e uma `Table` compartilham os mesmos
 buffers (o exemplo 08 prova comparando endereços de memória). Isso viabiliza
-o desenho do exemplo 09, recomendado quando a equipe domina pandas:
+o desenho do exemplo 09, recomendado quando pandas é a ferramenta dominante:
 
 - **pyarrow nas bordas**: leitura de datasets particionados (pruning),
   streaming em lotes (`to_batches`) e escrita parquet (incremental ou
   particionada idempotente);
-- **pandas no miolo**: a lógica de negócio em API que a equipe já domina,
+- **pandas no miolo**: a lógica de negócio numa API já dominada,
   recebendo cada lote como DataFrame sem custo de conversão.
 
-A equipe não precisa migrar para `pyarrow.compute` — precisa apenas das
-conversões (`to_pandas(types_mapper=pd.ArrowDtype)` / `Table.from_pandas`) e
-de manter o backend Arrow ponta a ponta (sem ele, cada conversão copia os
-dados e degrada tipos — int com nulo vira float64, string vira object).
+Não é preciso migrar para `pyarrow.compute` — bastam as conversões
+(`to_pandas(types_mapper=pd.ArrowDtype)` / `Table.from_pandas`) e manter o
+backend Arrow ponta a ponta (sem ele, cada conversão copia os dados e degrada
+tipos — int com nulo vira float64, string vira object).
 
 ## Nota sobre tipos inferidos em partições Hive
 

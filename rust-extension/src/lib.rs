@@ -1092,6 +1092,203 @@ fn sum_decimal_column(batch: PyRecordBatch, column: &str) -> PyResult<RustDecima
     Ok(RustDecimal::from_i128_with_scale(total, scale as u32))
 }
 
+// ---------------------------------------------------------------------------
+// Relacionamento 1:N (contrato -> parâmetros): três estratégias de
+// materialização, do mais caro (uma alocação por linha) ao zero-alocação
+// ---------------------------------------------------------------------------
+
+/// Núcleo de cálculo compartilhado pelas TRÊS variantes.
+///
+/// Recebe **fatias** (`&[T]`), o denominador comum: cada variante obtém as
+/// fatias de um jeito diferente, mas o cálculo em si é idêntico — então a
+/// diferença de tempo medida isola exatamente o custo de materialização.
+///
+/// Modelo: o contrato tem N "tranches" (pares taxa/prazo). Cada tranche rende
+/// juros compostos sobre o saldo corrente, e o saldo amortiza 30% entre elas.
+fn project_with_params(principal: f64, taxas: &[f64], prazos: &[i32]) -> f64 {
+    let mut saldo = principal;
+    let mut receita = 0.0;
+    // zip para em N: se as duas listas tiverem tamanhos diferentes, usa o menor
+    for (taxa, prazo) in taxas.iter().zip(prazos.iter()) {
+        // forma fechada dos juros da tranche (barata: sem loop mensal), para
+        // que o custo de ALOCAÇÃO fique visível na medição
+        receita += saldo * ((1.0 + *taxa).powi(*prazo) - 1.0);
+        saldo *= 0.7;
+    }
+    receita
+}
+
+/// Extrai e valida as 4 colunas do batch de contratos com parâmetros aninhados.
+///
+/// Devolve apenas REFERÊNCIAS para dentro do batch — nada é copiado aqui, em
+/// nenhuma das variantes. O 1:N chega como duas colunas `list<...>`: no Arrow,
+/// uma lista é um array plano de valores + um vetor de *offsets* que marca
+/// onde começa e termina a sublista de cada linha.
+type NestedCols<'a> = (
+    &'a PrimitiveArray<Int64Type>,
+    &'a PrimitiveArray<Float64Type>,
+    &'a arrow_array::ListArray,
+    &'a arrow_array::ListArray,
+);
+
+fn nested_columns<'a>(rb: &'a RecordBatch) -> PyResult<NestedCols<'a>> {
+    let ids = typed_column::<Int64Type>(rb, "id_contrato")?;
+    let principals = typed_column::<Float64Type>(rb, "principal")?;
+    let taxas = downcast_column::<arrow_array::ListArray>(rb, "parametros_taxa", "list<float64>")?;
+    let prazos = downcast_column::<arrow_array::ListArray>(rb, "parametros_prazo", "list<int32>")?;
+    Ok((ids, principals, taxas, prazos))
+}
+
+/// **Variante A — materialização ingênua: um `Vec` próprio por contrato.**
+///
+/// É a tradução direta do modelo mental de ORM ("um objeto Contrato com um
+/// vetor de Parâmetros dentro"). Cada contrato COPIA seus parâmetros para
+/// `Vec`s próprios: **2 alocações de heap por linha**. Em Rust isso é ~100x
+/// mais barato que os objetos Python de um ORM, mas continua sendo O(n)
+/// alocações — o custo que as variantes B e C eliminam.
+#[pyfunction]
+fn project_nested_materialized(py: Python<'_>, batch: PyRecordBatch) -> PyResult<Py<PyAny>> {
+    let rb = batch.into_inner();
+    let (ids, principals, taxas, prazos) = nested_columns(&rb)?;
+    let n = rb.num_rows();
+
+    // `values()` dá o array PLANO com todos os parâmetros de todos os
+    // contratos concatenados; `value_offsets()` dá os limites por linha.
+    let taxas_vals = taxas.values().as_primitive::<Float64Type>().values();
+    let taxas_off = taxas.value_offsets();
+    let prazos_vals = prazos.values().as_primitive::<Int32Type>().values();
+    let prazos_off = prazos.value_offsets();
+
+    /// O "objeto" no estilo ORM: dono dos seus dados (note os `Vec`, não `&[]`).
+    struct ContratoOwned {
+        principal: f64,
+        taxas: Vec<f64>,
+        prazos: Vec<i32>,
+    }
+
+    let (out_ids, out_revenues) = py.detach(|| {
+        // FASE 1 — materializar: constrói o "grafo de objetos" inteiro na memória
+        let mut contratos = Vec::with_capacity(n);
+        for row in 0..n {
+            // limites da sublista desta linha, lidos dos offsets
+            let (ti, tf) = (taxas_off[row] as usize, taxas_off[row + 1] as usize);
+            let (pi, pf) = (prazos_off[row] as usize, prazos_off[row + 1] as usize);
+            contratos.push(ContratoOwned {
+                principal: principals.value(row),
+                // `.to_vec()` = ALOCA e COPIA os parâmetros desta linha
+                taxas: taxas_vals[ti..tf].to_vec(),
+                prazos: prazos_vals[pi..pf].to_vec(),
+            });
+        }
+
+        // FASE 2 — calcular percorrendo os objetos materializados
+        let mut revenues = Vec::with_capacity(n);
+        for c in &contratos {
+            revenues.push(project_with_params(c.principal, &c.taxas, &c.prazos));
+        }
+        ((0..n).map(|i| ids.value(i)).collect::<Vec<i64>>(), revenues)
+    });
+
+    build_revenue_batch(py, out_ids, out_revenues)
+}
+
+/// **Variante B — buffers reaproveitados: aloca uma vez, reusa em todas as linhas.**
+///
+/// Mantém a materialização (os dados são copiados para `Vec`s), mas os `Vec`s
+/// são criados UMA vez fora do laço; a cada linha faz `clear()` + refill. O
+/// `clear()` zera o comprimento mas **preserva a capacidade**, então o heap só
+/// é tocado nas primeiras linhas, até o buffer atingir o maior tamanho de
+/// sublista. Alocações: O(1) em vez de O(n).
+///
+/// É a saída quando o algoritmo precisa mesmo de dados próprios (ex.: vai
+/// mutá-los) e você não pode simplesmente emprestar.
+#[pyfunction]
+fn project_nested_reused(py: Python<'_>, batch: PyRecordBatch) -> PyResult<Py<PyAny>> {
+    let rb = batch.into_inner();
+    let (ids, principals, taxas, prazos) = nested_columns(&rb)?;
+    let n = rb.num_rows();
+
+    let taxas_vals = taxas.values().as_primitive::<Float64Type>().values();
+    let taxas_off = taxas.value_offsets();
+    let prazos_vals = prazos.values().as_primitive::<Int32Type>().values();
+    let prazos_off = prazos.value_offsets();
+
+    let (out_ids, out_revenues) = py.detach(|| {
+        // os DOIS únicos buffers do processamento inteiro, fora do laço
+        let mut buf_taxas: Vec<f64> = Vec::new();
+        let mut buf_prazos: Vec<i32> = Vec::new();
+        let mut revenues = Vec::with_capacity(n);
+
+        for row in 0..n {
+            let (ti, tf) = (taxas_off[row] as usize, taxas_off[row + 1] as usize);
+            let (pi, pf) = (prazos_off[row] as usize, prazos_off[row + 1] as usize);
+
+            buf_taxas.clear(); // len = 0, capacidade PRESERVADA (não realoca)
+            buf_taxas.extend_from_slice(&taxas_vals[ti..tf]); // copia (memcpy), sem alocar
+            buf_prazos.clear();
+            buf_prazos.extend_from_slice(&prazos_vals[pi..pf]);
+
+            revenues.push(project_with_params(principals.value(row), &buf_taxas, &buf_prazos));
+        }
+        ((0..n).map(|i| ids.value(i)).collect::<Vec<i64>>(), revenues)
+    });
+
+    build_revenue_batch(py, out_ids, out_revenues)
+}
+
+/// **Variante C — fatias emprestadas: ZERO alocação, zero cópia.**
+///
+/// A estrutura 1:N já está codificada nos offsets do Arrow, então a sublista
+/// de cada contrato **já é** uma fatia contígua do buffer plano: basta apontar
+/// para ela. A struct `ContratoRef` dá a mesma ergonomia de "contrato com seu
+/// vetor de parâmetros" para escrever o algoritmo, mas guarda `&[T]` em vez de
+/// `Vec<T>` — nenhum byte é copiado, nenhuma alocação acontece.
+///
+/// O lifetime `'a` é a garantia (verificada em compilação) de que a fatia não
+/// sobrevive ao buffer Arrow de origem — a segurança que torna esse
+/// empréstimo viável, e que um ORM em linguagem gerenciada não tem como dar.
+#[pyfunction]
+fn project_nested_borrowed(py: Python<'_>, batch: PyRecordBatch) -> PyResult<Py<PyAny>> {
+    let rb = batch.into_inner();
+    let (ids, principals, taxas, prazos) = nested_columns(&rb)?;
+    let n = rb.num_rows();
+
+    let taxas_vals = taxas.values().as_primitive::<Float64Type>().values();
+    let taxas_off = taxas.value_offsets();
+    let prazos_vals = prazos.values().as_primitive::<Int32Type>().values();
+    let prazos_off = prazos.value_offsets();
+
+    /// O "objeto" de VISTAS: os campos apontam para os buffers Arrow originais.
+    struct ContratoRef<'a> {
+        principal: f64,
+        taxas: &'a [f64],
+        prazos: &'a [i32],
+    }
+
+    let (out_ids, out_revenues) = py.detach(|| {
+        let mut revenues = Vec::with_capacity(n);
+        for row in 0..n {
+            let (ti, tf) = (taxas_off[row] as usize, taxas_off[row + 1] as usize);
+            let (pi, pf) = (prazos_off[row] as usize, prazos_off[row + 1] as usize);
+            // montar a struct é só copiar 2 ponteiros + 2 comprimentos:
+            // os DADOS continuam onde sempre estiveram, no buffer Arrow
+            let contrato = ContratoRef {
+                principal: principals.value(row),
+                taxas: &taxas_vals[ti..tf],
+                prazos: &prazos_vals[pi..pf],
+            };
+            revenues.push(project_with_params(
+                contrato.principal,
+                contrato.taxas,
+                contrato.prazos,
+            ));
+        }
+        ((0..n).map(|i| ids.value(i)).collect::<Vec<i64>>(), revenues)
+    });
+
+    build_revenue_batch(py, out_ids, out_revenues)
+}
+
 /// Registro do módulo Python `etl_rust_ext._etl_rust_ext` (nome definido no
 /// `[tool.maturin]` do `pyproject.toml`); o pacote `etl_rust_ext` reexporta
 /// as funções em `python/etl_rust_ext/__init__.py`.
@@ -1104,6 +1301,9 @@ fn _etl_rust_ext(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compute_product_margin, m)?)?;
     m.add_function(wrap_pyfunction!(sum_decimal_column, m)?)?;
     m.add_function(wrap_pyfunction!(roundtrip_all_types, m)?)?;
+    m.add_function(wrap_pyfunction!(project_nested_materialized, m)?)?;
+    m.add_function(wrap_pyfunction!(project_nested_reused, m)?)?;
+    m.add_function(wrap_pyfunction!(project_nested_borrowed, m)?)?;
     m.add_class::<ParallelRevenueProjector>()?;
     m.add_class::<BoundedRevenueProjector>()?;
     Ok(())

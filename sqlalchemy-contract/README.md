@@ -1,10 +1,9 @@
 # sqlalchemy-contract — migrando o padrão ORM para a stack colunar
 
-Projeto Python isolado (gerenciado com `uv`) que porta o padrão atual de
-desenvolvimento de ETLs da equipe — modelos SQLAlchemy ORM + Postgres efêmero
-+ INSERT massivo de instâncias — para a stack Arrow/parquet/DuckDB,
-respondendo à pergunta: **onde o SQLAlchemy ainda encaixa, e de onde ele deve
-sair?**
+Projeto Python isolado (gerenciado com `uv`) que porta o padrão tradicional de
+desenvolvimento de ETLs — modelos SQLAlchemy ORM + banco relacional efêmero +
+INSERT massivo de instâncias — para a stack Arrow/parquet/DuckDB, respondendo
+à pergunta: **onde o SQLAlchemy ainda encaixa, e de onde ele deve sair?**
 
 A resposta em uma linha: o SQLAlchemy fica como **contrato de schema** (e
 como cliente da base final); sai do **caminho por onde os dados passam**.
@@ -62,6 +61,103 @@ Arrow.
 | navegação da árvore de contas | `WITH RECURSIVE` materializando a árvore achatada 1x |
 | FKs `DEFERRED` / constraints | anti-joins e contagens como queries de qualidade |
 | ORM como cliente da base final | **continua** — consultas pontuais é o habitat do ORM |
+
+## Produtividade: o que se ganha e o que se perde na troca
+
+O argumento mais comum para adotar um ORM é **produtividade**: desenvolver sem
+escrever as consultas SQL à mão e sem codificar a serialização/desserialização
+(banco → objeto Python → banco). É uma preocupação legítima ao migrar para a
+stack colunar — mas o balanço é mais favorável do que parece, e vale separar o
+que é perda real do que é necessidade que simplesmente deixa de existir.
+
+| O que o ORM entrega | O que acontece na stack colunar |
+| --- | --- |
+| Serialização banco ↔ objeto Python | **Deixa de ser necessária** (não é perda — é eliminação) |
+| Schema declarativo como código | **Mantido** — os modelos seguem como contrato |
+| DDL automático (`create_all`) | **Mantido**, e ganha geração de DDL para o destino final |
+| Não escrever SQL | **Muda de figura** — em carga analítica, o SQL é mais produtivo |
+| Navegação de relacionamentos (`contrato.parametros`) | **Perdida** — vira join explícito ou `list<...>` |
+| Autocomplete/checagem de tipos nas colunas | **Perdida parcialmente** — a perda ergonômica real |
+| Unit of work (mutar objetos → UPDATEs) | Perdido, mas ETL raramente precisa disso |
+
+### A serialização não é perdida — ela é dispensada
+
+O mapeamento objeto↔relacional existe para resolver um *descasamento de
+impedância*: o banco fala linhas e SQL, o Python fala objetos. Na stack
+colunar esse descasamento **não existe**: o dado nasce Arrow no parquet e
+permanece Arrow do início ao fim (DuckDB → pandas → Rust → parquet). Não há
+conversão para objetos em lugar nenhum.
+
+Compare o esforço de "ler uma tabela e começar a trabalhar":
+
+- **com ORM**: declarar a classe com todas as colunas e tipos → configurar
+  engine/session → query → objetos;
+- **na stack colunar**: `pd.read_parquet(caminho)` ou
+  `SELECT * FROM read_parquet(...)`. **Zero linhas de modelagem** — o schema
+  vem do próprio arquivo.
+
+No caminho de dados, portanto, escreve-se *menos* código, não mais.
+
+### Sobre "não escrever SQL": a premissa merece exame
+
+Esse argumento se aplica bem a cargas **OLTP** (buscar por chave, navegar
+relacionamentos, salvar um objeto). Para transformação **analítica** — o que
+um ETL faz — a relação se inverte: expressar `GROUP BY` com window functions,
+CTE recursiva, `PIVOT` ou `ASOF JOIN` *através do ORM* é mais verboso e menos
+expressivo do que escrever o SQL diretamente.
+
+O [exemplo 03](examples/03_account_hierarchy.py) ilustra: a hierarquia de
+contas achatada com `WITH RECURSIVE` são ~8 linhas de SQL legível; a mesma
+navegação via ORM seria um loop com estado ou uma query recursiva construída
+em objetos — mais código e mais difícil de ler. Em outras palavras, a
+"produtividade de não escrever SQL" tende a não se realizar justamente nas
+partes analíticas.
+
+Há ainda um ganho que o ORM não oferece: **exploração sem modelagem prévia**.
+Apontar o DuckDB para um parquet desconhecido e rodar `DESCRIBE`/`SUMMARIZE`
+na hora, sem definir classe nenhuma.
+
+### As perdas genuínas (e como mitigá-las)
+
+**1. Autocomplete e checagem de tipos nas colunas.** `df["valor"]` é uma chave
+string: a IDE não sabe que a coluna existe nem que é `Decimal` — enquanto
+`Lancamento.valor` era verificado. É a perda ergonômica real, e custa em erros
+de digitação que só aparecem em runtime.
+
+*Mitigação*: é exatamente o papel do contrato deste projeto. Os modelos
+declarativos seguem como fonte da verdade do schema, e a validação vira
+explícita (o batch produzido bate com `arrow_schema_for(Lancamento)`?),
+rodando como teste. Troca-se "a IDE avisa" por "o pipeline falha cedo, com
+mensagem clara". Para algo mais próximo do autocomplete, existem bibliotecas
+de DataFrame tipado (pandera, patito) — mas contrato + validação já cobre o
+essencial.
+
+**2. Navegação de relacionamentos.** Perder `contrato.parametros` é real. Em
+compensação, ganha-se controle explícito sobre o custo: o lazy loading é
+notório por gerar N+1 queries silenciosas, enquanto o join explícito (ou a
+coluna `list<...>`, ver [`../rust-extension/run_nested_params.py`](../rust-extension/run_nested_params.py))
+deixa o custo visível no código.
+
+### O custo que não é da ferramenta
+
+Há uma queda de produtividade **durante a transição**, enquanto se internaliza
+SQL analítico, pensamento colunar e a API do pyarrow. É um custo real de
+migração, que deve entrar no planejamento — mas é transitório, não uma
+característica permanente da stack. Encurtá-lo é justamente o propósito deste
+tutorial.
+
+### Resumo
+
+Para o **caminho de dados** (o que o ETL faz o tempo todo) a stack colunar é
+mais produtiva: menos código, sem modelagem prévia, sem camada de
+serialização. Para **schema e metadados**, o SQLAlchemy permanece no papel em
+que é excelente. Perde-se de fato o conforto do autocomplete nas colunas e a
+navegação implícita de relacionamentos — o primeiro compensável com contrato +
+validação.
+
+Em uma frase: troca-se **conveniência implícita** (a ferramenta decide e
+esconde o custo) por **explicitude com custo visível**. Em ETL de volume, essa
+troca costuma compensar — mas é uma troca, não um almoço grátis.
 
 ## Testes
 

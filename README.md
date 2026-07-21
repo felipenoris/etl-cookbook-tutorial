@@ -179,7 +179,11 @@ Rust, caches), voltando ao estado pós-clone:
 4. [`rust-extension/`](rust-extension) — fecha o ciclo: um ETL real que usa
    DuckDB (extract+join+spill) → pyarrow (projeção) → Rust via `pyo3-arrow`
    (transformação com estado, zero-copy) → pandas (resumo) → grava em
-   `data/rich/order_metrics/`.
+   `data/rich/order_metrics/`. Além do pipeline, exercita **multithreading**
+   (submissão serial + pool paralelo, com uma variante de memória constante
+   por backpressure), **todos os tipos Arrow** manipulados no lado nativo
+   (incluindo `decimal.Decimal`/`datetime.date` cruzando a fronteira) e o
+   estudo de **materialização de dados 1:N** (copiar vs. emprestar fatias).
 5. [`sqlalchemy-contract/`](sqlalchemy-contract) — para equipes vindas do
    padrão ORM + banco relacional efêmero: modelos SQLAlchemy no papel de
    contrato de schema (não de veículo de dados), a medição do custo do ORM

@@ -18,6 +18,7 @@ rust-extension/
   run_etl.py               # pipeline de ETL completo (DuckDB -> pyarrow -> Rust -> pandas -> parquet)
   run_contracts_parallel.py # multithreading: lotes submetidos serialmente, processados em paralelo
   run_data_types.py        # tipos Arrow (struct/list/map/decimal/binary...) manipulados no Rust
+  run_nested_params.py     # 1:N no Rust: materializar vs emprestar fatias (a discussão "isso vira um ORM?")
   docs_demo.py             # demonstração dos recursos do pdoc (math, mermaid, include, markdown)
   docs_includes/            # arquivos markdown puxados via `.. include::` nas docstrings
   docs/                     # gerado por `pdoc` (etapa 7) — abrir docs/index.html no browser
@@ -85,6 +86,9 @@ durante o build. Qualquer mudança em `src/lib.rs` exige rodar `uv sync` (ou
   Rust como `rust_decimal::Decimal` e chega ao Python como `decimal.Decimal`,
   sem passar por float em momento algum.
   Rode `uv run run_data_types.py` para ver tudo em ação sobre `data/raw`.
+- `project_nested_materialized` / `project_nested_reused` /
+  `project_nested_borrowed` — a mesma projeção de contratos com parâmetros
+  1:N, em três estratégias de materialização (ver seção abaixo).
 
 `compute_customer_running_spend` também ilustra um padrão comum em extensões
 nativas: a função Rust (`src/lib.rs`) exige todos os argumentos, e um helper
@@ -142,6 +146,37 @@ Topologia: `submit_batch` → fila limitada → N workers → fila de resultados
 em processamento. No exemplo, 1,6M de contratos são processados com uma fila
 de apenas 3 lotes e gravados em parquet — a base inteira nunca fica na RAM.
 
+## Dados 1:N no Rust: materializar ou emprestar?
+
+```bash
+uv run run_nested_params.py
+```
+
+Responde à dúvida natural de quem migra de um ETL com ORM: *"se eu construo
+um `Contrato` com um `Vec<Parametro>` dentro para rodar o algoritmo, não
+recriei o problema do ORM?"*. O exemplo mede as três estratégias sobre 1M de
+contratos com parâmetros 1:N (colunas `list<...>`), todas chamando o **mesmo**
+núcleo de cálculo — então a diferença isola só o custo de materialização:
+
+| Estratégia | Alocações | Ganho de performance (aprox.) |
+| --- | --- | --- |
+| **A)** `Vec` próprio por contrato (estilo ORM) | 2 por linha — O(n) | 1x (linha de base) |
+| **B)** buffers reaproveitados (`clear()` + refill) | O(1) | **~3x** |
+| **C)** fatias emprestadas sobre o `ListArray` | **zero** | **~4x** |
+
+A chave da variante C: no Arrow, uma coluna `list` é um **array plano de
+valores + offsets**, então os parâmetros de cada contrato *já são* uma fatia
+contígua do buffer. Uma struct `ContratoRef<'a>` com campos `&'a [f64]` dá a
+ergonomia de "contrato com seu vetor de parâmetros" **sem copiar um byte** —
+e o lifetime garante, em compilação, que a fatia não sobrevive ao buffer.
+
+A lição não é que A seja inviável (as três rodam 1M de contratos em dezenas
+de ms — em Python, objetos por linha custariam segundos e pressão de GC), e
+sim que **"não materialize por linha" continua valendo dentro do Rust**, com
+um preço bem mais benigno. O docstring do exemplo traz a tabela completa de
+quais custos do ORM sobrevivem à mudança de linguagem — vale a leitura no
+[pdoc gerado](docs/run_nested_params.html).
+
 ## Rodando o ETL completo
 
 ```bash
@@ -157,7 +192,7 @@ a extensão Rust, resume com pandas (backend Arrow) e grava o resultado em
 ## Documentação (etapa 7)
 
 ```bash
-uv run pdoc --math --mermaid --docformat google --output-dir docs etl_rust_ext ./run_etl.py ./run_contracts_parallel.py ./run_data_types.py ./docs_demo.py
+uv run pdoc --math --mermaid --docformat google --output-dir docs etl_rust_ext ./run_etl.py ./run_contracts_parallel.py ./run_data_types.py ./run_nested_params.py ./docs_demo.py
 ```
 
 Gera HTML estático em `docs/`, navegável abrindo `docs/index.html` direto do
@@ -234,11 +269,16 @@ calculados, propagação de nulos, erro para coluna ausente).
 `tests/test_data_types.py` cobre as funções de tipos: o roundtrip dos 11
 tipos, as fronteiras `datetime.date`/`decimal.Decimal` (incluindo o float
 rejeitado) e as validações de schema/escala.
-`tests/test_parallel_projection.py` cobre `project_revenue_batch` e o
-`ParallelRevenueProjector` (resultado consolidado igual ao serial, ordem de
-submissão, erros de schema na submissão). `tests/test_run_etl.py` testa cada
-etapa do pipeline isoladamente e, no teste marcado `slow`, roda o ETL inteiro
-gravando num diretório temporário.
+`tests/test_parallel_projection.py` cobre `project_revenue_batch` e as duas
+classes de projeção: o `ParallelRevenueProjector` (resultado consolidado igual
+ao serial, ordem de submissão, erros de schema) e o
+`BoundedRevenueProjector` (saída em parquet igual ao serial, fila de
+profundidade 1 sem deadlock, erros de `finish`/caminho inválido).
+`tests/test_nested_params.py` cobre as três estratégias de materialização 1:N
+(as três contra uma referência independente em Python puro, concordância
+mútua, sublistas vazias e erros de tipo aninhado).
+`tests/test_run_etl.py` testa cada etapa do pipeline isoladamente e, no teste
+marcado `slow`, roda o ETL inteiro gravando num diretório temporário.
 
 ## Referências
 

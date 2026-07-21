@@ -18,6 +18,13 @@ O banco dos caminhos 1 e 2 é SQLite em memória — o cenário MAIS favorável 
 ORM (sem rede, sem disco, sem fsync). Mesmo assim a diferença é de ordens de
 grandeza; contra um Postgres real, só piora.
 
+Nota sobre PRODUTIVIDADE: o argumento mais comum para adotar um ORM não é
+performance, e sim produtividade (não escrever SQL à mão, não codificar a
+serialização banco <-> objeto). Este exemplo mede só o custo; o balanço de
+produtividade da troca — o que se ganha, o que se perde e o que simplesmente
+deixa de ser necessário — está no README do projeto, na seção
+"Produtividade: o que se ganha e o que se perde na troca".
+
 Rode com: `uv run examples/02_orm_vs_columnar.py [n_linhas]` (default 100000)
 """
 

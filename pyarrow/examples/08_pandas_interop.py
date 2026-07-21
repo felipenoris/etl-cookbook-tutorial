@@ -3,7 +3,7 @@
 Conceitos:
 - `table.to_pandas(types_mapper=pd.ArrowDtype)` converte uma Table Arrow em
   DataFrame **sem copiar os buffers**: as colunas viram `ArrowDtype`, apoiadas
-  nos mesmos arrays Arrow. É a ponte que permite à equipe usar a API do pandas
+  nos mesmos arrays Arrow. É a ponte que permite usar a API do pandas
   sobre dados carregados pelo pyarrow.
 - `table.to_pandas()` sem `types_mapper` usa o backend clássico (numpy): copia
   os dados e degrada tipos — int com nulo vira float64+NaN, string vira
@@ -56,7 +56,7 @@ if __name__ == "__main__":
     print("backend numpy:", dict(com_nulo.to_pandas().dtypes))
     print("backend Arrow:", dict(com_nulo.to_pandas(types_mapper=pd.ArrowDtype).dtypes))
 
-    section("Manipulando com a API do pandas (a equipe joga em casa)")
+    section("Manipulando com a API do pandas (terreno familiar)")
     resumo = (
         df_arrow.assign(faixa=pd.cut(df_arrow["quantity"], bins=[0, 3, 7, 10], labels=["baixa", "media", "alta"]))
         .groupby(["status", "faixa"], observed=True)

@@ -1,7 +1,7 @@
 """Modelos SQLAlchemy como CONTRATO de schema — não como veículo de dados.
 
-Este módulo porta o modelo de lançamentos em planos de conta (o padrão atual
-da equipe: classes declarativas + Postgres efêmero) para o papel que o
+Este módulo porta o modelo de lançamentos em planos de conta (o padrão
+tradicional: classes declarativas + banco relacional efêmero) para o papel que o
 SQLAlchemy cumpre bem na stack nova: **definição executável do schema**, a
 fonte única da verdade dos metadados. As mudanças em relação ao original:
 
