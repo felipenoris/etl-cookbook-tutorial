@@ -57,8 +57,10 @@ durante o build. Qualquer mudança em `src/lib.rs` exige rodar `uv sync` (ou
   — exemplo que justifica sair do domínio vetorizado: acumula o gasto por
   cliente num único loop sequencial com estado (`HashMap<customer_id, total>`)
   e classifica um tier (bronze/prata/ouro) segundo os thresholds informados.
-- `project_revenue_batch(batch)` / classe `ParallelRevenueProjector` — projeção
-  de receita de contratos, serial e paralela (ver seção de multithreading).
+- `project_revenue_batch(batch)` / classes `ParallelRevenueProjector` (paralelo
+  simples) e `BoundedRevenueProjector` (memória constante: pool fixo + fila
+  limitada + escrita incremental em parquet) — projeção de receita de
+  contratos, serial e paralela (ver seção de multithreading).
 - `flatten_customer_profile(batch, reference_date)` — tipos Arrow complexos
   lidos no Rust: struct (`address.city`), list (tamanho de `tags`), map
   (lookup de chave), timestamp e bool. O `reference_date` atravessa a
@@ -113,9 +115,32 @@ para paralelizar):
 
 Resultado na prática: ~5.5x de speedup sobre a versão sequencial
 (`project_revenue_batch`, mesma computação), com resultados bit a bit
-idênticos. Para produção com muitos lotes pequenos, prefira um pool de
-threads de tamanho fixo (ex.: [rayon](https://docs.rs/rayon)) em vez de uma
-thread por lote — o exemplo usa `thread::spawn` para manter o código enxuto.
+idênticos.
+
+### `BoundedRevenueProjector` — memória constante para bases massivas
+
+O `ParallelRevenueProjector` acima tem uma limitação importante: o
+`submit_batch` **nunca bloqueia**, então se o Python ler mais rápido que os
+workers processam, os lotes em voo se acumulam sem limite (no pior caso, a
+base inteira fica residente), e o `collect()` materializa a saída inteira.
+Ok para bases pequenas; arriscado para as massivas.
+
+O `BoundedRevenueProjector` mantém o pico de memória **constante,
+independente do tamanho da base**, com três mecanismos:
+
+- **pool de tamanho fixo** (N workers reaproveitados, não uma thread por lote);
+- **fila limitada** (`queue_depth`): `submit_batch` **bloqueia** — soltando o
+  GIL via `py.detach` — quando a fila enche. É o *backpressure* que impede o
+  Python de correr à frente dos workers (`crossbeam-channel` provê a fila
+  MPMC limitada);
+- **escrita incremental**: uma thread escritora grava cada resultado direto
+  num parquet (via `parquet::arrow::ArrowWriter`); a saída nunca volta
+  consolidada — `finish()` devolve só `(caminho, linhas_escritas)`.
+
+Topologia: `submit_batch` → fila limitada → N workers → fila de resultados →
+1 escritora → parquet. Pico de memória ≈ `queue_depth` lotes de entrada + N
+em processamento. No exemplo, 1,6M de contratos são processados com uma fila
+de apenas 3 lotes e gravados em parquet — a base inteira nunca fica na RAM.
 
 ## Rodando o ETL completo
 

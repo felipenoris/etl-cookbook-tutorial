@@ -467,6 +467,193 @@ impl ParallelRevenueProjector {
     }
 }
 
+/// Um lote de contratos validado, pronto para atravessar o canal até um worker.
+/// Contém só `Arc`s sobre os buffers Arrow — mover para a thread não copia dados.
+struct WorkItem {
+    ids: PrimitiveArray<Int64Type>,
+    principals: PrimitiveArray<Float64Type>,
+    rates: PrimitiveArray<Float64Type>,
+    months: PrimitiveArray<Int32Type>,
+}
+
+/// Projetor de receita com **memória limitada**: pool fixo + fila limitada + escrita incremental.
+///
+/// Diferente do `ParallelRevenueProjector` (que dispara uma thread por lote e
+/// acumula TODO o resultado em memória no `collect`), este mantém o pico de
+/// memória constante — independente do tamanho da base — através de três
+/// mecanismos:
+///
+/// 1. **Pool de tamanho fixo** (`num_workers` threads, default = núcleos da
+///    máquina): não há uma thread por lote, e sim N workers reaproveitados.
+/// 2. **Fila limitada** (capacidade `queue_depth`): `submit_batch` **bloqueia**
+///    quando a fila enche — soltando o GIL. É o *backpressure*: o Python não
+///    consegue correr à frente dos workers, então nunca acumula mais que
+///    ~`queue_depth` lotes de entrada residentes.
+/// 3. **Escrita incremental**: cada resultado é gravado direto num parquet
+///    (via `ArrowWriter`) por uma thread escritora dedicada — a saída NUNCA
+///    volta consolidada para o Python. `finish()` devolve só um resumo
+///    (caminho, linhas escritas).
+///
+/// Topologia: `submit_batch` → fila limitada → N workers → fila de resultados
+/// → 1 escritora → parquet. Pico de memória ≈ `queue_depth` lotes de entrada
+/// + N em processamento + buffer de resultados + 1 row group no escritor.
+#[pyclass]
+struct BoundedRevenueProjector {
+    input_tx: Option<crossbeam_channel::Sender<WorkItem>>,
+    workers: Vec<JoinHandle<()>>,
+    writer: Option<JoinHandle<Result<u64, String>>>,
+    output_path: String,
+    num_workers: usize,
+    queue_depth: usize,
+    submitted: usize,
+}
+
+#[pymethods]
+impl BoundedRevenueProjector {
+    /// Abre o parquet de saída e sobe o pool. `num_workers` default = núcleos
+    /// da máquina; `queue_depth` default = `2 * num_workers`.
+    #[new]
+    #[pyo3(signature = (output_path, num_workers=None, queue_depth=None))]
+    fn new(
+        output_path: String,
+        num_workers: Option<usize>,
+        queue_depth: Option<usize>,
+    ) -> PyResult<Self> {
+        use parquet::arrow::ArrowWriter;
+
+        let num_workers = num_workers.unwrap_or_else(|| {
+            std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
+        });
+        let queue_depth = queue_depth.unwrap_or(num_workers * 2);
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id_contrato", DataType::Int64, false),
+            Field::new("receita_projetada", DataType::Float64, false),
+        ]));
+
+        // abre o arquivo AGORA para falhar cedo se o caminho for inválido
+        let file = std::fs::File::create(&output_path).map_err(|e| {
+            PyRuntimeError::new_err(format!("não consegui criar '{output_path}': {e}"))
+        })?;
+        let mut arrow_writer = ArrowWriter::try_new(file, schema.clone(), None).map_err(arrow_err)?;
+
+        let (input_tx, input_rx) = crossbeam_channel::bounded::<WorkItem>(queue_depth);
+        let (result_tx, result_rx) = crossbeam_channel::bounded::<RecordBatch>(queue_depth);
+
+        // thread escritora: consome resultados e grava incrementalmente
+        let writer = std::thread::spawn(move || -> Result<u64, String> {
+            let mut rows = 0u64;
+            for batch in result_rx.iter() {
+                rows += batch.num_rows() as u64;
+                arrow_writer.write(&batch).map_err(|e| e.to_string())?;
+            }
+            arrow_writer.close().map_err(|e| e.to_string())?;
+            Ok(rows)
+        });
+
+        // pool fixo de workers: cada um puxa da fila de entrada (MPMC) e
+        // empurra o resultado para a escritora
+        let mut workers = Vec::with_capacity(num_workers);
+        for _ in 0..num_workers {
+            let rx = input_rx.clone();
+            let tx = result_tx.clone();
+            let schema = schema.clone();
+            workers.push(std::thread::spawn(move || {
+                for item in rx.iter() {
+                    let (ids, revenues) =
+                        process_contracts_batch(item.ids, item.principals, item.rates, item.months);
+                    let batch = RecordBatch::try_new(
+                        schema.clone(),
+                        vec![
+                            Arc::new(Int64Array::from(ids)) as arrow_array::ArrayRef,
+                            Arc::new(Float64Array::from(revenues)),
+                        ],
+                    )
+                    .expect("schema fixo sempre bate com as colunas");
+                    if tx.send(batch).is_err() {
+                        break; // escritora sumiu (erro/panic): encerra
+                    }
+                }
+            }));
+        }
+        // solta os remetentes/receptores originais: o canal de resultados só
+        // fecha quando TODOS os workers (donos dos clones de `result_tx`) saem
+        drop(result_tx);
+        drop(input_rx);
+
+        Ok(Self {
+            input_tx: Some(input_tx),
+            workers,
+            writer: Some(writer),
+            output_path,
+            num_workers,
+            queue_depth,
+            submitted: 0,
+        })
+    }
+
+    /// Valida o lote e o enfileira. **Bloqueia** (soltando o GIL) se a fila
+    /// estiver cheia — o backpressure que limita a memória. Retorna o total
+    /// de lotes submetidos.
+    fn submit_batch(&mut self, py: Python<'_>, batch: PyRecordBatch) -> PyResult<usize> {
+        let record_batch = batch.into_inner();
+        let item = WorkItem {
+            ids: typed_column::<Int64Type>(&record_batch, "id_contrato")?.clone(),
+            principals: typed_column::<Float64Type>(&record_batch, "principal")?.clone(),
+            rates: typed_column::<Float64Type>(&record_batch, "taxa_mensal")?.clone(),
+            months: typed_column::<Int32Type>(&record_batch, "prazo_meses")?.clone(),
+        };
+        let tx = self.input_tx.as_ref().ok_or_else(|| {
+            PyValueError::new_err("finish() já foi chamado; crie um novo projetor")
+        })?;
+        // py.detach: se a fila está cheia, o send bloqueia — mas fora do GIL,
+        // então outras threads Python continuam. O map_err fica DENTRO do
+        // closure para não carregar o WorkItem (grande) no tipo de erro.
+        py.detach(|| tx.send(item).map_err(|_| ()))
+            .map_err(|_| PyRuntimeError::new_err("pipeline encerrado (uma thread falhou)"))?;
+        self.submitted += 1;
+        Ok(self.submitted)
+    }
+
+    #[getter]
+    fn num_workers(&self) -> usize {
+        self.num_workers
+    }
+
+    #[getter]
+    fn queue_depth(&self) -> usize {
+        self.queue_depth
+    }
+
+    fn batches_submitted(&self) -> usize {
+        self.submitted
+    }
+
+    /// Fecha a entrada, drena o pool e finaliza o parquet. Devolve
+    /// `(caminho, linhas_escritas)` — um resumo, nunca a base inteira.
+    fn finish(&mut self, py: Python<'_>) -> PyResult<(String, u64)> {
+        // fechar o remetente faz `rx.iter()` dos workers terminar ao esvaziar
+        self.input_tx.take();
+        let workers = std::mem::take(&mut self.workers);
+        let writer = self
+            .writer
+            .take()
+            .ok_or_else(|| PyValueError::new_err("finish() já foi chamado"))?;
+
+        let rows = py
+            .detach(|| -> Result<u64, String> {
+                for w in workers {
+                    w.join().map_err(|_| "uma worker thread entrou em panic".to_string())?;
+                }
+                // workers saíram -> clones de result_tx dropados -> escritora finaliza
+                writer.join().map_err(|_| "a thread escritora entrou em panic".to_string())?
+            })
+            .map_err(PyRuntimeError::new_err)?;
+
+        Ok((self.output_path.clone(), rows))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tipos de dados Arrow no Rust: bool, timestamp, struct, list, map, decimal,
 // binary — leitura e manipulação zero-copy do lado nativo
@@ -918,5 +1105,6 @@ fn _etl_rust_ext(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sum_decimal_column, m)?)?;
     m.add_function(wrap_pyfunction!(roundtrip_all_types, m)?)?;
     m.add_class::<ParallelRevenueProjector>()?;
+    m.add_class::<BoundedRevenueProjector>()?;
     Ok(())
 }

@@ -22,6 +22,7 @@ from decimal import Decimal
 import pyarrow as pa
 
 from ._etl_rust_ext import (
+    BoundedRevenueProjector,
     ParallelRevenueProjector,
     add_line_total,
     flatten_customer_profile,
@@ -109,6 +110,7 @@ def compute_product_margin(
 
 
 __all__ = [
+    "BoundedRevenueProjector",
     "ParallelRevenueProjector",
     "add_line_total",
     "compute_customer_running_spend",

@@ -1,4 +1,5 @@
-"""Testes da projeção paralela de receita (`ParallelRevenueProjector`).
+"""Testes da projeção paralela de receita (`ParallelRevenueProjector` e
+`BoundedRevenueProjector`).
 
 O cálculo de referência usa a forma fechada da tabela Price
 (``receita = n * parcela - principal``), que o loop mês a mês do Rust deve
@@ -6,9 +7,15 @@ reproduzir a menos de erro de ponto flutuante.
 """
 
 import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
 import pytest
 
-from etl_rust_ext import ParallelRevenueProjector, project_revenue_batch
+from etl_rust_ext import (
+    BoundedRevenueProjector,
+    ParallelRevenueProjector,
+    project_revenue_batch,
+)
 
 
 def make_contracts(ids, principals, rates, months) -> pa.RecordBatch:
@@ -119,3 +126,78 @@ class TestParallelRevenueProjector:
         projetor.submit_batch(make_contracts([1], [1000.0], [0.01], [12]))
         projetor.collect()
         assert projetor.batches_submitted() == 1
+
+
+class TestBoundedRevenueProjector:
+    def test_writes_parquet_matching_serial(self, tmp_path):
+        lotes = [
+            make_contracts(range(i * 50, (i + 1) * 50), [90_000.0] * 50, [0.013] * 50, [200] * 50)
+            for i in range(6)
+        ]
+        saida = tmp_path / "out.parquet"
+        projetor = BoundedRevenueProjector(str(saida), num_workers=3, queue_depth=2)
+        for lote in lotes:
+            projetor.submit_batch(lote)
+        caminho, linhas = projetor.finish()
+
+        assert caminho == str(saida)
+        assert linhas == 300
+        # a saída é um parquet; relendo e ordenando, bate com o serial
+        bounded = pq.read_table(saida).sort_by("id_contrato")
+        serial = pa.concat_tables(
+            [pa.table(project_revenue_batch(lote)) for lote in lotes]
+        ).sort_by("id_contrato")
+        assert bounded.num_rows == serial.num_rows
+        assert bounded.equals(serial)
+
+    def test_tiny_queue_does_not_deadlock(self, tmp_path):
+        # fila de 1 com muitos lotes: o backpressure bloqueia e libera, mas
+        # nunca trava (os workers drenam) — todas as linhas chegam ao parquet
+        saida = tmp_path / "out.parquet"
+        projetor = BoundedRevenueProjector(str(saida), num_workers=2, queue_depth=1)
+        for i in range(20):
+            projetor.submit_batch(make_contracts([i], [10_000.0], [0.01], [12]))
+        _, linhas = projetor.finish()
+        assert linhas == 20
+
+    def test_config_getters(self, tmp_path):
+        projetor = BoundedRevenueProjector(str(tmp_path / "o.parquet"), num_workers=4, queue_depth=8)
+        assert projetor.num_workers == 4
+        assert projetor.queue_depth == 8
+        projetor.finish()
+
+    def test_default_workers_and_queue(self, tmp_path):
+        projetor = BoundedRevenueProjector(str(tmp_path / "o.parquet"))
+        assert projetor.num_workers >= 1
+        assert projetor.queue_depth == 2 * projetor.num_workers
+        projetor.finish()
+
+    def test_submit_after_finish_raises(self, tmp_path):
+        projetor = BoundedRevenueProjector(str(tmp_path / "o.parquet"))
+        projetor.finish()
+        with pytest.raises(ValueError, match="finish"):
+            projetor.submit_batch(make_contracts([1], [1000.0], [0.01], [12]))
+
+    def test_finish_twice_raises(self, tmp_path):
+        projetor = BoundedRevenueProjector(str(tmp_path / "o.parquet"))
+        projetor.finish()
+        with pytest.raises(ValueError, match="finish"):
+            projetor.finish()
+
+    def test_invalid_output_path_raises(self):
+        with pytest.raises(RuntimeError, match="criar"):
+            BoundedRevenueProjector("/caminho/inexistente/xyz/o.parquet")
+
+    def test_invalid_batch_fails_on_submit(self, tmp_path):
+        projetor = BoundedRevenueProjector(str(tmp_path / "o.parquet"))
+        with pytest.raises(ValueError, match="prazo_meses"):
+            projetor.submit_batch(
+                pa.record_batch(
+                    {
+                        "id_contrato": pa.array([1], type=pa.int64()),
+                        "principal": pa.array([1.0], type=pa.float64()),
+                        "taxa_mensal": pa.array([0.01], type=pa.float64()),
+                    }
+                )
+            )
+        projetor.finish()
