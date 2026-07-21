@@ -15,6 +15,16 @@ Modelo de dados (poucas colunas, propositalmente simples):
              mes (6 partições, cada uma calibrada para ~50MB) para permitir
              exercitar leitura particionada, JOINs e spill em memoria limitada.
 
+As DIMENSÕES concentram os tipos de dados exercitados pela stack
+Arrow/Parquet/DuckDB (a fato `orders` fica só com os tipos básicos, para
+manter as partições calibradas):
+
+- customers: bool (`is_active`), timestamp µs (`signup_ts`), struct
+  (`address{street,city,zip}`), list<string> (`tags`) e map<string,string>
+  (`preferences`) — além de string, int64 e date32.
+- products: decimal128(12,2) (`unit_cost`, sempre 2 casas decimais) e binary
+  (`sku`, 8 bytes) — além de string, int64 e float64.
+
 Uso:
     uv run data/generate_data.py --generate           # gera as bases em data/raw
     uv run data/generate_data.py --clean              # remove os parquet de raw/ e rich/
@@ -24,6 +34,7 @@ Uso:
 from __future__ import annotations
 
 import argparse
+from decimal import Decimal
 from pathlib import Path
 
 import numpy as np
@@ -43,6 +54,20 @@ CATEGORIES = ["eletronicos", "alimentos", "vestuario", "livros", "casa"]
 STATUSES = ["novo", "enviado", "entregue", "cancelado", "devolvido"]
 STATUS_WEIGHTS = [0.15, 0.20, 0.50, 0.10, 0.05]
 
+CITIES = {
+    "norte": ["Manaus", "Belem", "Porto Velho"],
+    "nordeste": ["Recife", "Salvador", "Fortaleza"],
+    "centro_oeste": ["Goiania", "Cuiaba", "Campo Grande"],
+    "sudeste": ["Sao Paulo", "Rio de Janeiro", "Belo Horizonte"],
+    "sul": ["Curitiba", "Porto Alegre", "Florianopolis"],
+}
+TAGS = ["vip", "atacado", "varejo", "online", "fidelidade"]
+PREF_CHOICES = {
+    "canal": ["email", "sms", "whatsapp"],
+    "newsletter": ["sim", "nao"],
+    "idioma": ["pt", "es", "en"],
+}
+
 ORDER_YEAR = 2025
 ORDER_MONTHS = list(range(1, 7))  # 6 partições
 TARGET_PARTITION_BYTES = 50 * 1024 * 1024
@@ -55,17 +80,59 @@ def _rng(offset: int) -> np.random.Generator:
 
 def generate_customers() -> pa.Table:
     rng = _rng(1)
-    customer_id = np.arange(1, NUM_CUSTOMERS + 1, dtype=np.int64)
-    region = rng.choice(REGIONS, size=NUM_CUSTOMERS)
+    n = NUM_CUSTOMERS
+    customer_id = np.arange(1, n + 1, dtype=np.int64)
+    region = rng.choice(REGIONS, size=n)
     customer_name = [f"cliente_{i:05d}" for i in customer_id]
-    signup_offset_days = rng.integers(0, 3 * 365, size=NUM_CUSTOMERS)
+    signup_offset_days = rng.integers(0, 3 * 365, size=n)
     signup_date = np.datetime64("2023-01-01") + signup_offset_days.astype("timedelta64[D]")
+
+    # bool: ~85% de clientes ativos
+    is_active = rng.random(n) < 0.85
+
+    # timestamp[us]: o instante exato do cadastro (data + hora aleatória do dia)
+    seconds = rng.integers(0, 86_400, size=n)
+    signup_ts = signup_date.astype("datetime64[s]") + seconds.astype("timedelta64[s]")
+
+    # struct<street, city, zip>: endereço aninhado, com cidade coerente à região
+    address = pa.array(
+        [
+            {
+                "street": f"Rua {chr(65 + int(rng.integers(0, 26)))}, {int(rng.integers(1, 2000))}",
+                "city": str(rng.choice(CITIES[str(reg)])),
+                "zip": f"{int(rng.integers(10_000, 99_999)):05d}-{int(rng.integers(0, 999)):03d}",
+            }
+            for reg in region
+        ],
+        type=pa.struct([("street", pa.string()), ("city", pa.string()), ("zip", pa.string())]),
+    )
+
+    # list<string>: 0 a 3 tags por cliente, sem repetição
+    tags = pa.array(
+        [sorted(rng.choice(TAGS, size=int(rng.integers(0, 4)), replace=False).tolist()) for _ in range(n)],
+        type=pa.list_(pa.string()),
+    )
+
+    # map<string,string>: preferências chave->valor (nem todo cliente tem todas)
+    preferences = pa.array(
+        [
+            [(chave, str(rng.choice(valores))) for chave, valores in PREF_CHOICES.items() if rng.random() < 0.7]
+            for _ in range(n)
+        ],
+        type=pa.map_(pa.string(), pa.string()),
+    )
+
     return pa.table(
         {
             "customer_id": customer_id,
             "customer_name": customer_name,
             "region": region,
             "signup_date": pa.array(signup_date, type=pa.date32()),
+            "is_active": pa.array(is_active),
+            "signup_ts": pa.array(signup_ts.astype("datetime64[us]"), type=pa.timestamp("us")),
+            "address": address,
+            "tags": tags,
+            "preferences": preferences,
         }
     )
 
@@ -76,12 +143,25 @@ def generate_products() -> pa.Table:
     category = rng.choice(CATEGORIES, size=NUM_PRODUCTS)
     product_name = [f"produto_{i:04d}" for i in product_id]
     unit_price = np.round(rng.uniform(5.0, 500.0, size=NUM_PRODUCTS), 2)
+
+    # decimal128(12,2): custo unitário com EXATAMENTE 2 casas decimais —
+    # dinheiro deve ser decimal, não float (0.1 + 0.2 != 0.3 em float64)
+    unit_cost = pa.array(
+        [Decimal(f"{preco * frac:.2f}") for preco, frac in zip(unit_price, rng.uniform(0.5, 0.8, NUM_PRODUCTS))],
+        type=pa.decimal128(12, 2),
+    )
+
+    # binary: um SKU opaco de 8 bytes (hash/código de barras binário)
+    sku = pa.array([rng.bytes(8) for _ in range(NUM_PRODUCTS)], type=pa.binary())
+
     return pa.table(
         {
             "product_id": product_id,
             "product_name": product_name,
             "category": category,
             "unit_price": unit_price,
+            "unit_cost": unit_cost,
+            "sku": sku,
         }
     )
 

@@ -11,7 +11,17 @@ from _common import load_customers, load_orders, load_products
 
 def test_customers_loads_with_arrow_backend():
     customers = load_customers()
-    assert set(customers.columns) == {"customer_id", "customer_name", "region", "signup_date"}
+    assert set(customers.columns) == {
+        "customer_id",
+        "customer_name",
+        "region",
+        "signup_date",
+        "is_active",
+        "signup_ts",
+        "address",
+        "tags",
+        "preferences",
+    }
     assert isinstance(customers["customer_id"].dtype, pd.ArrowDtype)
     assert isinstance(customers["customer_name"].dtype, pd.ArrowDtype)
     assert len(customers) == 2_000
@@ -20,7 +30,14 @@ def test_customers_loads_with_arrow_backend():
 
 def test_products_loads_with_arrow_backend():
     products = load_products()
-    assert set(products.columns) == {"product_id", "product_name", "category", "unit_price"}
+    assert set(products.columns) == {
+        "product_id",
+        "product_name",
+        "category",
+        "unit_price",
+        "unit_cost",
+        "sku",
+    }
     assert isinstance(products["unit_price"].dtype, pd.ArrowDtype)
     assert len(products) == 200
     assert products["product_id"].is_unique

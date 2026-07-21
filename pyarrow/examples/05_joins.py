@@ -6,6 +6,12 @@ Conceitos:
 - Join encadeado (fato + 2 dimensões), igual ao exemplo de merge do pandas.
 - Diferente do pandas, o resultado do join no Arrow não garante a ordem das
   linhas — se a ordem importa, usar `.sort_by(...)` no final.
+- Limitação do motor de join (Acero): colunas de tipos ANINHADOS (struct,
+  list, map) não são suportadas como payload — por isso projetamos as
+  dimensões para as colunas necessárias ANTES do join (boa prática de
+  qualquer forma: menos dados atravessando o operador). Para carregar um
+  struct pelo join, o caminho é achatá-lo antes (`pc.struct_field`) — ver o
+  exemplo 10 de tipos.
 
 Rode com: `uv run examples/05_joins.py`
 """
@@ -16,8 +22,11 @@ from _common import customers_dataset, orders_dataset, products_dataset, section
 
 if __name__ == "__main__":
     orders = orders_dataset().to_table(filter=pc.field("order_month") == 1)
-    customers = customers_dataset().to_table()
-    products = products_dataset().to_table()
+    # projeção pré-join: só as colunas usadas (e nenhuma aninhada)
+    customers = customers_dataset().to_table(columns=["customer_id", "customer_name", "region"])
+    products = products_dataset().to_table(
+        columns=["product_id", "product_name", "category", "unit_price"]
+    )
 
     section("Join orders -> customers (inner)")
     enriched = orders.join(customers, keys="customer_id", join_type="inner")

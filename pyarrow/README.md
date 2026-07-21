@@ -24,6 +24,7 @@ uv sync
 | `07_sorting_and_pivot_like.py` | `sort_by`, `pc.rank`, "pivot" manual via `group_by` + reshape |
 | `08_pandas_interop.py` | Table -> DataFrame (`types_mapper=pd.ArrowDtype`, zero-copy provado por endereço de buffer) e DataFrame -> Table (`from_pandas`, `preserve_index`), roundtrip fiel |
 | `09_hybrid_pandas_etl.py` | padrão híbrido: `to_batches` (streaming), lógica de negócio em pandas puro, `ParquetWriter` incremental, `delete_matching` (recarga idempotente) |
+| `10_data_types.py` | todos os tipos da stack: decimal(12,2) exato, list/struct/map (kernels), binary, construção manual e roundtrip parquet |
 
 ```bash
 uv run examples/01_reading_partitioned_datasets.py

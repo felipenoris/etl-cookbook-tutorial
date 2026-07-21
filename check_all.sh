@@ -48,12 +48,13 @@ step 5/8 "rust-extension: suíte pytest (compila a extensão via maturin no 1º 
 step 6/8 "ETL completo (DuckDB -> pyarrow -> Rust -> pandas -> parquet)"
 (cd rust-extension && uv run run_etl.py)
 
-step 7/8 "Projeção paralela de contratos (multithreading no Rust)"
+step 7/8 "Projeção paralela de contratos + tipos Arrow no Rust"
 (cd rust-extension && uv run run_contracts_parallel.py)
+(cd rust-extension && uv run run_data_types.py)
 
 step 8/8 "Documentação: pdoc (docs/) e cargo doc (target/doc/)"
 (cd rust-extension && uv run pdoc --math --mermaid --docformat google --output-dir docs \
-    etl_rust_ext ./run_etl.py ./run_contracts_parallel.py ./docs_demo.py)
+    etl_rust_ext ./run_etl.py ./run_contracts_parallel.py ./run_data_types.py ./docs_demo.py)
 (cd rust-extension && cargo doc --no-deps --document-private-items)
 
 printf '\n\033[1;32mTudo OK!\033[0m Documentação em rust-extension/docs/index.html '

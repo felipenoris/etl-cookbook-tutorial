@@ -1,8 +1,10 @@
-"""Testes unitários das funções da extensão Rust (`etl_rust_ext`).
+"""Testes unitários de `add_line_total` e `compute_customer_running_spend`.
 
-Exercita as duas funções expostas por `src/lib.rs` com RecordBatches pequenos
-construídos em memória, validando o contrato de entrada/saída (schema, tipos,
-valores calculados, propagação de nulos e erros para colunas ausentes).
+Exercita as duas funções de enriquecimento de batch de `src/lib.rs` com
+RecordBatches pequenos construídos em memória, validando o contrato de
+entrada/saída (schema, tipos, valores calculados, propagação de nulos e erros
+para colunas ausentes). As demais funções têm suítes próprias:
+`test_data_types.py` (tipos) e `test_parallel_projection.py` (multithreading).
 """
 
 import pyarrow as pa

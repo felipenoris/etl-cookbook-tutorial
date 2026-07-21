@@ -1,9 +1,12 @@
 //! Extensão Rust (PyO3 + pyo3-arrow) usada pelo ETL em `run_etl.py`.
 //!
-//! Todas as funções recebem e devolvem `pyarrow.RecordBatch` diretamente, sem
-//! copiar os buffers de dados na entrada: o batch chega via a Arrow C Data
-//! Interface (protocolo `__arrow_c_array__`, que o `pyo3-arrow` reconhece em
-//! qualquer objeto Python compatível — pyarrow, arro3, polars, etc.).
+//! Os dados tabulares entram e saem como `pyarrow.RecordBatch`, sem cópia dos
+//! buffers na entrada: o batch chega via a Arrow C Data Interface (protocolo
+//! `__arrow_c_array__`, que o `pyo3-arrow` reconhece em qualquer objeto
+//! Python compatível — pyarrow, arro3, polars, etc.). Escalares atravessam a
+//! fronteira pelas conversões opcionais do pyo3: `decimal.Decimal` ↔
+//! `rust_decimal::Decimal` (feature `rust_decimal`) e `datetime.date` ↔
+//! `chrono::NaiveDate` (feature `chrono`).
 //!
 //! O que é exposto ao Python:
 //!
@@ -14,6 +17,14 @@
 //!   um resultado **novo** (`id_contrato`, `receita_projetada`), sem carregar
 //!   as colunas de entrada adiante — o `ParallelRevenueProjector` distribui os
 //!   lotes entre threads (ver a doc da própria classe).
+//! - `flatten_customer_profile` e `compute_product_margin`: manipulam os
+//!   tipos Arrow complexos (struct/list/map/timestamp/bool; decimal/binary)
+//!   no lado nativo, recebendo escalares `datetime.date` e `decimal.Decimal`
+//!   como parâmetros.
+//! - `roundtrip_all_types`: leitura E escrita dos 11 tipos da stack em uma
+//!   função só — o teste integral da fronteira.
+//! - `sum_decimal_column`: a exceção do retorno tabular — devolve um ESCALAR
+//!   (`rust_decimal::Decimal`, que chega como `decimal.Decimal`).
 //!
 //! # Sobre o tipo de retorno das funções (`Py<PyAny>` vs `PyRecordBatch`)
 //!
@@ -35,16 +46,39 @@
 //! mais específico.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::{Float64Type, Int32Type, Int64Type};
-use arrow_array::{Float64Array, Int64Array, PrimitiveArray, RecordBatch, StringArray};
-use arrow_schema::{DataType, Field, Schema};
+use arrow_array::types::{Decimal128Type, Float64Type, Int32Type, Int64Type, TimestampMicrosecondType};
+use arrow_array::{
+    Array, BooleanArray, Decimal128Array, Float64Array, Int32Array, Int64Array, PrimitiveArray,
+    RecordBatch, StringArray,
+};
+use arrow_schema::{DataType, Field, Schema, TimeUnit};
+use chrono::{DateTime, Duration, NaiveDate};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3_arrow::PyRecordBatch;
+use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
+use rust_decimal::Decimal as RustDecimal;
+
+/// Época Unix como `NaiveDate` — a referência do tipo Arrow `date32`
+/// (dias desde 1970-01-01).
+fn epoch() -> NaiveDate {
+    NaiveDate::from_ymd_opt(1970, 1, 1).expect("data válida")
+}
+
+/// `date32` (i32 de dias) -> `chrono::NaiveDate`.
+fn date32_to_naive(days: i32) -> NaiveDate {
+    epoch() + Duration::days(days as i64)
+}
+
+/// `chrono::NaiveDate` -> `date32` (i32 de dias).
+fn naive_to_date32(date: NaiveDate) -> i32 {
+    (date - epoch()).num_days() as i32
+}
 
 /// Converte qualquer erro do arrow-rs em `ValueError` do Python.
 fn arrow_err<E: std::fmt::Display>(err: E) -> PyErr {
@@ -433,6 +467,444 @@ impl ParallelRevenueProjector {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Tipos de dados Arrow no Rust: bool, timestamp, struct, list, map, decimal,
+// binary — leitura e manipulação zero-copy do lado nativo
+// ---------------------------------------------------------------------------
+
+/// Downcast genérico com mensagem de erro amigável (para tipos NÃO primitivos,
+/// que o `typed_column` não cobre: struct, list, map, binary, bool...).
+fn downcast_column<'a, T: 'static>(
+    batch: &'a RecordBatch,
+    name: &str,
+    expected: &str,
+) -> PyResult<&'a T> {
+    let col = get_column(batch, name)?;
+    col.as_any().downcast_ref::<T>().ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "coluna '{name}' deveria ser {expected}, mas é {:?}",
+            col.data_type()
+        ))
+    })
+}
+
+/// Achata o perfil do cliente, exercitando os tipos aninhados/complexos no Rust.
+///
+/// Entrada (schema de `data/raw/customers`): `customer_id` (int64),
+/// `is_active` (**bool**), `signup_ts` (**timestamp µs**), `address`
+/// (**struct**<street,city,zip>), `tags` (**list**<string>) e `preferences`
+/// (**map**<string,string>).
+///
+/// O argumento `reference_date` chega do Python como **`datetime.date`** e
+/// vira **`chrono::NaiveDate`** automaticamente — a feature opcional `chrono`
+/// do pyo3, análoga à `rust_decimal` usada em `compute_product_margin`.
+///
+/// Saída: `customer_id`, `city` (extraída do struct), `num_tags` (tamanho da
+/// list), `canal` (lookup da chave "canal" no map; nulo se ausente),
+/// `signup_date` (**date32** derivada do timestamp — escrita de data
+/// Rust -> Python), `dias_desde_cadastro` (aritmética de calendário com
+/// `chrono`: `reference_date - data_do_cadastro`) e `is_active` (bool).
+///
+/// Tudo é lido zero-copy: struct expõe os filhos como arrays-coluna
+/// (`column_by_name`), list expõe offsets + valores achatados, e map é uma
+/// list de pares (key, value) — nenhum objeto Python é criado por linha.
+#[pyfunction]
+fn flatten_customer_profile(
+    py: Python<'_>,
+    batch: PyRecordBatch,
+    reference_date: NaiveDate,
+) -> PyResult<Py<PyAny>> {
+    let rb = batch.into_inner();
+    let n = rb.num_rows();
+
+    let ids = typed_column::<Int64Type>(&rb, "customer_id")?;
+    let is_active = downcast_column::<BooleanArray>(&rb, "is_active", "bool")?;
+
+    // timestamp[us] é um PrimitiveArray de i64 (microssegundos desde a época)
+    let signup_col = get_column(&rb, "signup_ts")?;
+    if !matches!(signup_col.data_type(), DataType::Timestamp(TimeUnit::Microsecond, _)) {
+        return Err(PyValueError::new_err(format!(
+            "coluna 'signup_ts' deveria ser timestamp[us], mas é {:?}",
+            signup_col.data_type()
+        )));
+    }
+    let signup_ts = signup_col.as_primitive::<TimestampMicrosecondType>();
+
+    // struct: os campos são arrays-filha; extrair "city" é pegar uma referência
+    let address = downcast_column::<arrow_array::StructArray>(&rb, "address", "struct")?;
+    let city = address
+        .column_by_name("city")
+        .ok_or_else(|| PyValueError::new_err("struct 'address' não tem o campo 'city'"))?
+        .as_string::<i32>();
+
+    // list<string>: offsets delimitam a fatia de cada linha no array achatado
+    let tags = downcast_column::<arrow_array::ListArray>(&rb, "tags", "list<string>")?;
+
+    // map<string,string>: keys() e values() achatados + offsets por linha
+    let prefs = downcast_column::<arrow_array::MapArray>(&rb, "preferences", "map<string,string>")?;
+    let map_keys = prefs.keys().as_string::<i32>();
+    let map_values = prefs.values().as_string::<i32>();
+    let map_offsets = prefs.value_offsets();
+
+    let mut cities: Vec<&str> = Vec::with_capacity(n);
+    let mut num_tags: Vec<i32> = Vec::with_capacity(n);
+    let mut canais: Vec<Option<String>> = Vec::with_capacity(n);
+    let mut signup_dates: Vec<i32> = Vec::with_capacity(n);
+    let mut dias: Vec<i64> = Vec::with_capacity(n);
+
+    for row in 0..n {
+        cities.push(city.value(row));
+        num_tags.push(tags.value_length(row));
+        // lookup manual no map: varre só os pares da linha `row`
+        let (ini, fim) = (map_offsets[row] as usize, map_offsets[row + 1] as usize);
+        let canal = (ini..fim)
+            .find(|&j| map_keys.value(j) == "canal")
+            .map(|j| map_values.value(j).to_string());
+        canais.push(canal);
+        // timestamp[us] -> NaiveDate (chrono), e daí aritmética de CALENDÁRIO
+        // — em vez de dividir microssegundos na mão
+        let cadastro = DateTime::from_timestamp_micros(signup_ts.value(row))
+            .ok_or_else(|| PyValueError::new_err("signup_ts fora do intervalo representável"))?
+            .date_naive();
+        signup_dates.push(naive_to_date32(cadastro));
+        dias.push((reference_date - cadastro).num_days());
+    }
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("customer_id", DataType::Int64, false),
+        Field::new("city", DataType::Utf8, false),
+        Field::new("num_tags", DataType::Int32, false),
+        Field::new("canal", DataType::Utf8, true),
+        Field::new("signup_date", DataType::Date32, false),
+        Field::new("dias_desde_cadastro", DataType::Int64, false),
+        Field::new("is_active", DataType::Boolean, false),
+    ]));
+    let columns: Vec<arrow_array::ArrayRef> = vec![
+        Arc::new(ids.clone()),
+        Arc::new(StringArray::from(cities)),
+        Arc::new(Int32Array::from(num_tags)),
+        Arc::new(StringArray::from(canais)),
+        Arc::new(arrow_array::Date32Array::from(signup_dates)),
+        Arc::new(Int64Array::from(dias)),
+        Arc::new(is_active.clone()),
+    ];
+    let out = RecordBatch::try_new(schema, columns).map_err(arrow_err)?;
+    Ok(PyRecordBatch::new(out).into_pyarrow(py)?.unbind())
+}
+
+/// Extrai e valida uma coluna decimal128 de escala 2 (o padrão do projeto).
+fn decimal2_column<'a>(
+    batch: &'a RecordBatch,
+    name: &str,
+) -> PyResult<&'a PrimitiveArray<Decimal128Type>> {
+    let col = get_column(batch, name)?;
+    match col.data_type() {
+        DataType::Decimal128(_, 2) => Ok(col.as_primitive::<Decimal128Type>()),
+        outro => Err(PyValueError::new_err(format!(
+            "coluna '{name}' deveria ser decimal128 com escala 2, mas é {outro:?}"
+        ))),
+    }
+}
+
+/// Converte uma célula decimal128(_, 2) para `rust_decimal::Decimal`.
+///
+/// A ponte entre os dois mundos decimais: o Arrow guarda o valor como i128 +
+/// escala (metadado da coluna); o `rust_decimal` embute a escala no próprio
+/// valor e dá aritmética decimal completa (+, -, *, /, `round_dp`...).
+fn decimal2_to_rust(cents: i128) -> RustDecimal {
+    RustDecimal::from_i128_with_scale(cents, 2)
+}
+
+/// Calcula a margem dos produtos com `rust_decimal::Decimal`, preservando 2 casas.
+///
+/// Entrada (schema de `data/raw/products`): `product_id` (int64),
+/// `unit_price` (float64), `unit_cost` (**decimal128 com escala 2** — o
+/// padrão do projeto: 2 casas decimais) e `sku` (**binary**).
+///
+/// O argumento `desconto` (fração, ex.: 0.10 = 10%) chega do Python como
+/// `decimal.Decimal` e vira `rust_decimal::Decimal` automaticamente — é a
+/// feature opcional `rust_decimal` do pyo3 fazendo a conversão na fronteira.
+/// (Nota: o pyo3 também aceita int/float aqui, convertendo-os; quem impõe
+/// `decimal.Decimal` estrito — TypeError para float — é o wrapper Python em
+/// `etl_rust_ext/__init__.py`, política do projeto para valores monetários.)
+///
+/// Toda a aritmética roda em `rust_decimal::Decimal` (exata, base 10):
+/// `preco_liquido = round_dp(preco * (1 - desconto), 2)` e
+/// `margin = preco_liquido - custo`. A saída volta para o Arrow como
+/// **decimal128(12,2)** via `mantissa()` após `rescale(2)`; `margin_pct` é
+/// float64 (proporção — aí float é adequado) e `sku_hex` expõe o binary.
+#[pyfunction]
+fn compute_product_margin(
+    py: Python<'_>,
+    batch: PyRecordBatch,
+    desconto: RustDecimal,
+) -> PyResult<Py<PyAny>> {
+    if desconto < RustDecimal::ZERO || desconto >= RustDecimal::ONE {
+        return Err(PyValueError::new_err(format!(
+            "desconto deve estar em [0, 1), recebi {desconto}"
+        )));
+    }
+
+    let rb = batch.into_inner();
+    let n = rb.num_rows();
+
+    let ids = typed_column::<Int64Type>(&rb, "product_id")?;
+    let prices = typed_column::<Float64Type>(&rb, "unit_price")?;
+    let costs = decimal2_column(&rb, "unit_cost")?;
+    let sku = downcast_column::<arrow_array::BinaryArray>(&rb, "sku", "binary")?;
+
+    let fator = RustDecimal::ONE - desconto;
+    let mut margins_cents: Vec<i128> = Vec::with_capacity(n);
+    let mut margin_pcts: Vec<f64> = Vec::with_capacity(n);
+    let mut sku_hex: Vec<String> = Vec::with_capacity(n);
+
+    for row in 0..n {
+        // float64 -> Decimal uma única vez, na fronteira; daí em diante a
+        // aritmética é decimal exata (base 10), com arredondamento explícito
+        let price = RustDecimal::from_f64(prices.value(row))
+            .ok_or_else(|| PyValueError::new_err("unit_price não representável como Decimal"))?
+            .round_dp(2);
+        let preco_liquido = (price * fator).round_dp(2);
+        let margin = preco_liquido - decimal2_to_rust(costs.value(row));
+
+        // de volta ao Arrow: rescale(2) fixa a escala, mantissa() dá o i128
+        let mut normalizada = margin;
+        normalizada.rescale(2);
+        margins_cents.push(normalizada.mantissa());
+        margin_pcts.push(
+            (margin / preco_liquido)
+                .to_f64()
+                .ok_or_else(|| PyValueError::new_err("margin_pct não representável como f64"))?,
+        );
+
+        let mut hex = String::with_capacity(sku.value(row).len() * 2);
+        for byte in sku.value(row) {
+            write!(hex, "{byte:02x}").expect("write em String não falha");
+        }
+        sku_hex.push(hex);
+    }
+
+    let margin_array = Decimal128Array::from_iter_values(margins_cents)
+        .with_precision_and_scale(12, 2)
+        .map_err(arrow_err)?;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("product_id", DataType::Int64, false),
+        Field::new("margin", DataType::Decimal128(12, 2), false),
+        Field::new("margin_pct", DataType::Float64, false),
+        Field::new("sku_hex", DataType::Utf8, false),
+    ]));
+    let columns: Vec<arrow_array::ArrayRef> = vec![
+        Arc::new(ids.clone()),
+        Arc::new(margin_array),
+        Arc::new(Float64Array::from(margin_pcts)),
+        Arc::new(StringArray::from(sku_hex)),
+    ];
+    let out = RecordBatch::try_new(schema, columns).map_err(arrow_err)?;
+    Ok(PyRecordBatch::new(out).into_pyarrow(py)?.unbind())
+}
+
+/// Roundtrip integral: lê E escreve TODOS os tipos da stack no lado Rust.
+///
+/// Recebe um batch com 11 colunas — uma por tipo — e devolve um batch com o
+/// MESMO schema, onde cada coluna foi derivada da entrada em Rust. Cada tipo
+/// é portanto exercitado nas duas direções (leitura Python -> Rust via
+/// downcast zero-copy; escrita Rust -> Python via arrays/builders do
+/// arrow-rs):
+///
+/// | coluna      | tipo Arrow         | transformação no Rust           |
+/// |-------------|--------------------|---------------------------------|
+/// | `texto`     | utf8               | uppercase                       |
+/// | `inteiro`   | int64              | + 1                             |
+/// | `flutuante` | float64            | * 2                             |
+/// | `logico`    | bool               | negado                          |
+/// | `data`      | date32             | + 30 dias (`chrono::NaiveDate`) |
+/// | `instante`  | timestamp[us]      | + 1 hora                        |
+/// | `valor`     | decimal128(12,2)   | + 10% (`rust_decimal`, 2 casas) |
+/// | `lista`     | list<utf8>         | cada elemento em uppercase      |
+/// | `estrutura` | struct<nome,quantidade> | nome uppercase, quantidade * 2 |
+/// | `mapa`      | map<utf8,utf8>     | valores em uppercase            |
+/// | `binario`   | binary             | bytes revertidos                |
+///
+/// Os aninhados usam os *builders* do arrow-rs na escrita (`ListBuilder`,
+/// `MapBuilder`, `StructArray`) — o caminho idiomático para construir arrays
+/// com offsets. Assume colunas sem nulos.
+#[pyfunction]
+fn roundtrip_all_types(py: Python<'_>, batch: PyRecordBatch) -> PyResult<Py<PyAny>> {
+    use arrow_array::builder::{BinaryBuilder, ListBuilder, MapBuilder, StringBuilder};
+    use arrow_array::types::Date32Type;
+    use arrow_array::{ArrayRef, Date32Array, TimestampMicrosecondArray};
+
+    let rb = batch.into_inner();
+    let n = rb.num_rows();
+
+    // --- LEITURA (Python -> Rust): um downcast tipado por família de tipo ---
+    let texto = downcast_column::<StringArray>(&rb, "texto", "utf8")?;
+    let inteiro = typed_column::<Int64Type>(&rb, "inteiro")?;
+    let flutuante = typed_column::<Float64Type>(&rb, "flutuante")?;
+    let logico = downcast_column::<BooleanArray>(&rb, "logico", "bool")?;
+    let data = typed_column::<Date32Type>(&rb, "data")?;
+    let instante_col = get_column(&rb, "instante")?;
+    if !matches!(instante_col.data_type(), DataType::Timestamp(TimeUnit::Microsecond, _)) {
+        return Err(PyValueError::new_err(format!(
+            "coluna 'instante' deveria ser timestamp[us], mas é {:?}",
+            instante_col.data_type()
+        )));
+    }
+    let instante = instante_col.as_primitive::<TimestampMicrosecondType>();
+    let valor = decimal2_column(&rb, "valor")?;
+    let lista = downcast_column::<arrow_array::ListArray>(&rb, "lista", "list<utf8>")?;
+    let lista_vals = lista.values().as_string::<i32>();
+    let estrutura = downcast_column::<arrow_array::StructArray>(&rb, "estrutura", "struct")?;
+    let mapa = downcast_column::<arrow_array::MapArray>(&rb, "mapa", "map<utf8,utf8>")?;
+    let binario = downcast_column::<arrow_array::BinaryArray>(&rb, "binario", "binary")?;
+
+    // --- TRANSFORMAÇÃO + ESCRITA (Rust -> Python) ---
+
+    // simples: coletar iteradores em arrays novos
+    let texto_out: StringArray = (0..n).map(|i| Some(texto.value(i).to_uppercase())).collect();
+    let inteiro_out = Int64Array::from((0..n).map(|i| inteiro.value(i) + 1).collect::<Vec<_>>());
+    let flutuante_out =
+        Float64Array::from((0..n).map(|i| flutuante.value(i) * 2.0).collect::<Vec<_>>());
+    let logico_out: BooleanArray = (0..n).map(|i| Some(!logico.value(i))).collect();
+
+    // date32 -> NaiveDate -> +30 dias de CALENDÁRIO -> date32
+    let data_out = Date32Array::from(
+        (0..n)
+            .map(|i| naive_to_date32(date32_to_naive(data.value(i)) + Duration::days(30)))
+            .collect::<Vec<_>>(),
+    );
+
+    // timestamp[us]: aritmética direta nos microssegundos
+    let instante_out = TimestampMicrosecondArray::from(
+        (0..n).map(|i| instante.value(i) + 3_600_000_000).collect::<Vec<_>>(),
+    );
+
+    // decimal: +10% com rust_decimal, arredondado para as 2 casas do projeto
+    let fator = RustDecimal::new(110, 2); // 1.10
+    let valor_out = Decimal128Array::from_iter_values((0..n).map(|i| {
+        let mut novo = (decimal2_to_rust(valor.value(i)) * fator).round_dp(2);
+        novo.rescale(2);
+        novo.mantissa()
+    }))
+    .with_precision_and_scale(12, 2)
+    .map_err(arrow_err)?;
+
+    // list<utf8>: ListBuilder reconstrói offsets + valores
+    let mut lista_builder = ListBuilder::new(StringBuilder::new());
+    let loff = lista.value_offsets();
+    for i in 0..n {
+        for j in loff[i] as usize..loff[i + 1] as usize {
+            lista_builder.values().append_value(lista_vals.value(j).to_uppercase());
+        }
+        lista_builder.append(true);
+    }
+    let lista_out = lista_builder.finish();
+
+    // struct: transforma as arrays-filha e remonta com StructArray::from
+    let nome = estrutura
+        .column_by_name("nome")
+        .ok_or_else(|| PyValueError::new_err("struct 'estrutura' não tem o campo 'nome'"))?
+        .as_string::<i32>();
+    let quantidade = estrutura
+        .column_by_name("quantidade")
+        .ok_or_else(|| PyValueError::new_err("struct 'estrutura' não tem o campo 'quantidade'"))?
+        .as_primitive::<Int32Type>();
+    let nome_out: StringArray = (0..n).map(|i| Some(nome.value(i).to_uppercase())).collect();
+    let quantidade_out =
+        Int32Array::from((0..n).map(|i| quantidade.value(i) * 2).collect::<Vec<_>>());
+    let estrutura_out = arrow_array::StructArray::from(vec![
+        (
+            Arc::new(Field::new("nome", DataType::Utf8, true)),
+            Arc::new(nome_out) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("quantidade", DataType::Int32, true)),
+            Arc::new(quantidade_out) as ArrayRef,
+        ),
+    ]);
+
+    // map<utf8,utf8>: MapBuilder com chaves preservadas e valores derivados
+    let mut mapa_builder = MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
+    let mkeys = mapa.keys().as_string::<i32>();
+    let mvals = mapa.values().as_string::<i32>();
+    let moff = mapa.value_offsets();
+    for i in 0..n {
+        for j in moff[i] as usize..moff[i + 1] as usize {
+            mapa_builder.keys().append_value(mkeys.value(j));
+            mapa_builder.values().append_value(mvals.value(j).to_uppercase());
+        }
+        mapa_builder.append(true).map_err(arrow_err)?;
+    }
+    let mapa_out = mapa_builder.finish();
+
+    // binary: bytes revertidos via BinaryBuilder
+    let mut binario_builder = BinaryBuilder::new();
+    for i in 0..n {
+        let invertido: Vec<u8> = binario.value(i).iter().rev().copied().collect();
+        binario_builder.append_value(&invertido);
+    }
+    let binario_out = binario_builder.finish();
+
+    // schema de saída: os DataTypes dos aninhados vêm dos próprios arrays
+    // construídos (evita divergência de nomes internos de campos)
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("texto", DataType::Utf8, true),
+        Field::new("inteiro", DataType::Int64, true),
+        Field::new("flutuante", DataType::Float64, true),
+        Field::new("logico", DataType::Boolean, true),
+        Field::new("data", DataType::Date32, true),
+        Field::new("instante", instante_out.data_type().clone(), true),
+        Field::new("valor", DataType::Decimal128(12, 2), true),
+        Field::new("lista", lista_out.data_type().clone(), true),
+        Field::new("estrutura", estrutura_out.data_type().clone(), true),
+        Field::new("mapa", mapa_out.data_type().clone(), true),
+        Field::new("binario", DataType::Binary, true),
+    ]));
+    let columns: Vec<ArrayRef> = vec![
+        Arc::new(texto_out),
+        Arc::new(inteiro_out),
+        Arc::new(flutuante_out),
+        Arc::new(logico_out),
+        Arc::new(data_out),
+        Arc::new(instante_out),
+        Arc::new(valor_out),
+        Arc::new(lista_out),
+        Arc::new(estrutura_out),
+        Arc::new(mapa_out),
+        Arc::new(binario_out),
+    ];
+    let out = RecordBatch::try_new(schema, columns).map_err(arrow_err)?;
+    Ok(PyRecordBatch::new(out).into_pyarrow(py)?.unbind())
+}
+
+/// Soma uma coluna decimal128 e devolve o total como `rust_decimal::Decimal`.
+///
+/// A direção de volta da feature `rust_decimal` do pyo3: o retorno
+/// `RustDecimal` chega ao Python como um `decimal.Decimal` genuíno — a soma
+/// de uma coluna monetária atravessa a fronteira sem NUNCA passar por float.
+/// A soma em si é feita nos i128 crus (exata por construção); o Decimal só
+/// entra na borda, carregando a escala junto do valor.
+#[pyfunction]
+fn sum_decimal_column(batch: PyRecordBatch, column: &str) -> PyResult<RustDecimal> {
+    let rb = batch.into_inner();
+    let col = get_column(&rb, column)?;
+    let scale = match col.data_type() {
+        DataType::Decimal128(_, s) => *s,
+        outro => {
+            return Err(PyValueError::new_err(format!(
+                "coluna '{column}' deveria ser decimal128, mas é {outro:?}"
+            )))
+        }
+    };
+    let values = col.as_primitive::<Decimal128Type>();
+    let total: i128 = (0..values.len())
+        .filter(|&i| values.is_valid(i))
+        .map(|i| values.value(i))
+        .sum();
+    Ok(RustDecimal::from_i128_with_scale(total, scale as u32))
+}
+
 /// Registro do módulo Python `etl_rust_ext._etl_rust_ext` (nome definido no
 /// `[tool.maturin]` do `pyproject.toml`); o pacote `etl_rust_ext` reexporta
 /// as funções em `python/etl_rust_ext/__init__.py`.
@@ -441,6 +913,10 @@ fn _etl_rust_ext(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(add_line_total, m)?)?;
     m.add_function(wrap_pyfunction!(compute_customer_running_spend, m)?)?;
     m.add_function(wrap_pyfunction!(project_revenue_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(flatten_customer_profile, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_product_margin, m)?)?;
+    m.add_function(wrap_pyfunction!(sum_decimal_column, m)?)?;
+    m.add_function(wrap_pyfunction!(roundtrip_all_types, m)?)?;
     m.add_class::<ParallelRevenueProjector>()?;
     Ok(())
 }

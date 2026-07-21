@@ -12,11 +12,12 @@ com um ETL completo que usa DuckDB, pyarrow, pandas e Rust juntos.
 rust-extension/
   Cargo.toml              # crate Rust: pyo3 + pyo3-arrow
   pyproject.toml          # build-system = maturin (compilado automaticamente por `uv sync`)
-  src/lib.rs              # funções expostas: add_line_total, compute_customer_running_spend
+  src/lib.rs              # funções expostas ao Python (ver "Funções expostas" abaixo)
   python/etl_rust_ext/     # pacote Python (mixed layout do maturin)
     __init__.py
   run_etl.py               # pipeline de ETL completo (DuckDB -> pyarrow -> Rust -> pandas -> parquet)
   run_contracts_parallel.py # multithreading: lotes submetidos serialmente, processados em paralelo
+  run_data_types.py        # tipos Arrow (struct/list/map/decimal/binary...) manipulados no Rust
   docs_demo.py             # demonstração dos recursos do pdoc (math, mermaid, include, markdown)
   docs_includes/            # arquivos markdown puxados via `.. include::` nas docstrings
   docs/                     # gerado por `pdoc` (etapa 7) — abrir docs/index.html no browser
@@ -56,6 +57,32 @@ durante o build. Qualquer mudança em `src/lib.rs` exige rodar `uv sync` (ou
   — exemplo que justifica sair do domínio vetorizado: acumula o gasto por
   cliente num único loop sequencial com estado (`HashMap<customer_id, total>`)
   e classifica um tier (bronze/prata/ouro) segundo os thresholds informados.
+- `project_revenue_batch(batch)` / classe `ParallelRevenueProjector` — projeção
+  de receita de contratos, serial e paralela (ver seção de multithreading).
+- `flatten_customer_profile(batch, reference_date)` — tipos Arrow complexos
+  lidos no Rust: struct (`address.city`), list (tamanho de `tags`), map
+  (lookup de chave), timestamp e bool. O `reference_date` atravessa a
+  fronteira como `datetime.date` -> [`chrono::NaiveDate`](https://docs.rs/chrono)
+  (feature opcional `chrono` do pyo3), a aritmética de dias usa o calendário
+  do chrono e a coluna `signup_date` volta como date32.
+- `roundtrip_all_types(batch)` — o teste integral da fronteira: um batch com
+  uma coluna de CADA um dos 11 tipos da stack entra no Rust e volta com o
+  mesmo schema, cada coluna derivada nativamente (uppercase, +30 dias de
+  calendário, +10% decimal, bytes revertidos...). Exercita leitura E escrita
+  de todos os tipos, incluindo os aninhados via builders do arrow-rs
+  (`ListBuilder`, `MapBuilder`, `StructArray`).
+- `compute_product_margin(batch, desconto=Decimal("0.00"))` — decimal de
+  ponta a ponta: a coluna `unit_cost` (decimal128 de escala 2) vira
+  [`rust_decimal::Decimal`](https://docs.rs/rust_decimal) no Rust (aritmética
+  decimal exata, `round_dp(2)`), e o `desconto` atravessa a fronteira como
+  `decimal.Decimal` -> `rust_decimal::Decimal` via a feature opcional
+  `rust_decimal` do pyo3. O wrapper Python rejeita float com `TypeError`
+  (política do projeto para valores monetários). Também expõe o binary
+  (`sku` -> hex).
+- `sum_decimal_column(batch, coluna)` — a direção de volta: o total sai do
+  Rust como `rust_decimal::Decimal` e chega ao Python como `decimal.Decimal`,
+  sem passar por float em momento algum.
+  Rode `uv run run_data_types.py` para ver tudo em ação sobre `data/raw`.
 
 `compute_customer_running_spend` também ilustra um padrão comum em extensões
 nativas: a função Rust (`src/lib.rs`) exige todos os argumentos, e um helper
@@ -105,7 +132,7 @@ a extensão Rust, resume com pandas (backend Arrow) e grava o resultado em
 ## Documentação (etapa 7)
 
 ```bash
-uv run pdoc --math --mermaid --docformat google --output-dir docs etl_rust_ext ./run_etl.py ./run_contracts_parallel.py ./docs_demo.py
+uv run pdoc --math --mermaid --docformat google --output-dir docs etl_rust_ext ./run_etl.py ./run_contracts_parallel.py ./run_data_types.py ./docs_demo.py
 ```
 
 Gera HTML estático em `docs/`, navegável abrindo `docs/index.html` direto do
@@ -179,6 +206,9 @@ uv run pytest                 # inclui o pipeline completo sobre data/raw (~15s)
 `tests/test_rust_extension.py` exercita `add_line_total` e
 `compute_customer_running_spend` com RecordBatches pequenos (valores
 calculados, propagação de nulos, erro para coluna ausente).
+`tests/test_data_types.py` cobre as funções de tipos: o roundtrip dos 11
+tipos, as fronteiras `datetime.date`/`decimal.Decimal` (incluindo o float
+rejeitado) e as validações de schema/escala.
 `tests/test_parallel_projection.py` cobre `project_revenue_batch` e o
 `ParallelRevenueProjector` (resultado consolidado igual ao serial, ordem de
 submissão, erros de schema na submissão). `tests/test_run_etl.py` testa cada

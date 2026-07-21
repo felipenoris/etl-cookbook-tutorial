@@ -10,7 +10,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from _common import ORDERS_GLOB
+from _common import CUSTOMERS_GLOB, ORDERS_GLOB, PRODUCTS_GLOB
 
 
 @pytest.fixture
@@ -204,6 +204,39 @@ def test_sorted_parquet_has_selective_zonemaps(tmp_path: Path, con):
             f"SELECT COUNT(*) FROM read_parquet('{arquivo}') WHERE chave = 42"
         ).fetchone()[0]
         assert linhas == 1000
+
+
+def test_duckdb_maps_all_stack_types(con):
+    """Exemplo 14: cada tipo lógico do parquet vira o tipo SQL esperado."""
+    tipos_c = dict(
+        (r[0], r[1])
+        for r in con.sql(
+            f"DESCRIBE SELECT * FROM read_parquet('{CUSTOMERS_GLOB}', hive_partitioning=true)"
+        ).fetchall()
+    )
+    tipos_p = dict(
+        (r[0], r[1])
+        for r in con.sql(f"DESCRIBE SELECT * FROM read_parquet('{PRODUCTS_GLOB}')").fetchall()
+    )
+    assert tipos_c["is_active"] == "BOOLEAN"
+    assert tipos_c["signup_ts"] == "TIMESTAMP"
+    assert tipos_c["address"].startswith("STRUCT(")
+    assert tipos_c["tags"] == "VARCHAR[]"
+    assert tipos_c["preferences"] == "MAP(VARCHAR, VARCHAR)"
+    assert tipos_p["unit_cost"] == "DECIMAL(12,2)"  # 2 casas: padrão do projeto
+    assert tipos_p["sku"] == "BLOB"
+
+
+def test_decimal_arithmetic_stays_decimal(con):
+    tipo_soma, tipo_produto = con.sql(
+        f"""
+        SELECT typeof(SUM(unit_cost)), ANY_VALUE(typeof(unit_cost * 2))
+        FROM read_parquet('{PRODUCTS_GLOB}')
+        """
+    ).fetchone()
+    assert tipo_soma.startswith("DECIMAL")
+    assert tipo_produto.startswith("DECIMAL")
+    assert tipo_soma.endswith(",2)") and tipo_produto.endswith(",2)")
 
 
 @pytest.mark.network

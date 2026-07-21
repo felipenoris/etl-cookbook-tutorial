@@ -26,6 +26,7 @@ Cada arquivo em `examples/` é independente e roda com `uv run`:
 | `06_pivot_table.py` | `pivot_table` (com `aggfunc`/`margins`), `melt`, `pivot` |
 | `07_index_manipulation.py` | `set_index`/`reset_index`, `MultiIndex`, `sort_index`, `stack`/`unstack`, `reindex` |
 | `08_window_and_time.py` | `resample`, `rolling`, `cumsum`/`cumcount` |
+| `09_arrow_data_types.py` | tipos Arrow no pandas: bool, timestamp, decimal(12,2), list/struct (acessores), map (escotilha pyarrow), binary, roundtrip |
 
 ```bash
 uv run examples/01_loading_and_dtypes.py
