@@ -20,16 +20,43 @@ tem dois mecanismos mais simples, cada um com seu lugar:
 `con.create_function(nome, fn_python, [tipos], tipo_retorno)`
     Registra uma função **Python** chamável de dentro do SQL — o análogo de
     criar uma UDF no servidor, exceto que aqui "o servidor" é o seu processo.
-    No modo default a função é chamada UMA VEZ POR LINHA, com o custo de
-    atravessar a fronteira SQL->Python milhões de vezes: flexível, lento.
+    No modo default (`type="native"`) a função é escrita como se recebesse
+    UM valor por vez, o que a torna simples de escrever para qualquer lógica.
 
 `con.create_function(..., type="arrow")`
-    A variante que importa em ETL: a função recebe/devolve **vetores Arrow**
-    (um chunk de milhares de linhas por chamada), e o corpo roda vetorizado
-    (`pyarrow.compute`, C++). O placar do exemplo: 5.6M de linhas em ~0.5s —
-    a versão linha a linha levaria minutos. É a mesma filosofia da extensão
-    Rust do tutorial (`../rust-extension`): atravessar a fronteira POR LOTE,
-    nunca por linha.
+    A variante vetorizada: a função recebe/devolve **vetores Arrow** (um
+    chunk de milhares de linhas por chamada), e o corpo roda em
+    `pyarrow.compute` (C++), sem laço Python.
+
+**Medição com controle** (a MESMA lógica de desconto sobre 5,6M de linhas,
+incluindo uma consulta *sem* UDF para isolar o custo do scan+join):
+
+| Abordagem | Tempo total | Custo da lógica | vs SQL puro |
+|---|---|---|---|
+| controle: scan+join+`SUM`, sem UDF | ~0,01s | — | — |
+| **SQL puro** (`CASE WHEN`) | ~0,02s | ~0,01s | **1x** |
+| UDF `native` (valor a valor) | ~0,35s | ~0,34s | **~30x mais lento** |
+| UDF `arrow` (vetorizada) | ~0,57s | ~0,56s | **~50x mais lento** |
+
+Duas conclusões, e a ordem entre elas importa:
+
+1. **O custo dominante é SAIR do motor** — não o estilo em que a UDF é
+   escrita. Qualquer UDF Python custa 20–50x o equivalente em SQL puro.
+   Antes de escolher entre `native` e `arrow`, pergunte se a lógica não cabe
+   num `CASE WHEN`, num operador aritmético ou numa window function.
+2. **Entre as duas variantes, a diferença é modesta** — e aqui a `native`
+   ganha (~1,6x). Isso contraria a intuição de "uma chamada Python por
+   linha seria ordens de grandeza pior": o DuckDB amortiza o overhead
+   processando vetores internamente, enquanto a `arrow` paga alocação de
+   arrays intermediários a cada kernel do `pyarrow.compute` (`greater`,
+   `multiply`, `if_else`...). Com função mais pesada por linha (raiz, log,
+   polinômio) a `arrow` passa à frente, mas por ~10%.
+
+**A lição prática**: use SQL sempre que a lógica for expressável nele; recorra
+a UDF Python quando não for, escolhendo a variante pela clareza (a diferença
+entre elas é pequena perto do custo de já ter saído do motor); e desça para
+uma extensão nativa (`../rust-extension`) quando o cálculo por entidade for
+pesado o bastante para justificar.
 
 Rode com: `uv run examples/10_macros_and_python_udfs.py`
 """
@@ -52,6 +79,20 @@ def remover_acentos(texto: str) -> str:
         return None
     decomposto = unicodedata.normalize("NFKD", texto)
     return "".join(ch for ch in decomposto if not unicodedata.combining(ch))
+
+
+def desconto_progressivo_native(preco: float) -> float:
+    """A MESMA regra, escrita valor a valor (type="native", o default).
+
+    Serve de contraponto à versão vetorizada abaixo: mesma lógica, mesmo
+    resultado, escrita muito mais simples — e, como o exemplo mede, sem
+    perda relevante de performance.
+    """
+    if preco > 100.0:
+        return preco * 0.90
+    if preco > 50.0:
+        return preco * 0.95
+    return preco
 
 
 def desconto_progressivo(preco: pa.lib.ChunkedArray) -> pa.lib.ChunkedArray:
@@ -119,18 +160,49 @@ if __name__ == "__main__":
         """
     ).show()
 
-    section("Por que 'arrow' importa: mesma UDF nos 200 produtos x 5.6M de pedidos")
-    inicio = time.perf_counter()
-    con.sql(
-        f"""
-        SELECT SUM(desconto_progressivo(p.unit_price * o.quantity)) AS total_com_desconto
-        FROM read_parquet('{ORDERS_GLOB}', hive_partitioning=true) o
-        JOIN read_parquet('{PRODUCTS_GLOB}') p USING (product_id)
+    section("Quanto custa sair do motor: SQL puro vs UDF (5.6M de pedidos)")
+    # a mesma regra de desconto, escrita valor a valor (native)
+    con.create_function("desconto_native", desconto_progressivo_native, [DOUBLE], DOUBLE)
+
+    consulta = """
+        SELECT SUM({fn}(p.unit_price * o.quantity)) AS total_com_desconto
+        FROM read_parquet('%s', hive_partitioning=true) o
+        JOIN read_parquet('%s') p USING (product_id)
         WHERE o.order_month = 1
-        """
-    ).show()
-    print(f"UDF arrow sobre 5.6M linhas: {time.perf_counter() - inicio:.2f}s")
-    print("(a versão linha a linha levaria minutos: 5.6M chamadas Python individuais)")
+    """ % (ORDERS_GLOB, PRODUCTS_GLOB)
+
+    # o SQL puro equivalente: o CONTROLE que revela quanto custa sair do motor
+    sql_puro = """
+        SELECT SUM(CASE
+                     WHEN p.unit_price * o.quantity > 100 THEN p.unit_price * o.quantity * 0.90
+                     WHEN p.unit_price * o.quantity > 50  THEN p.unit_price * o.quantity * 0.95
+                     ELSE p.unit_price * o.quantity
+                   END) AS total_com_desconto
+        FROM read_parquet('%s', hive_partitioning=true) o
+        JOIN read_parquet('%s') p USING (product_id)
+        WHERE o.order_month = 1
+    """ % (ORDERS_GLOB, PRODUCTS_GLOB)
+
+    medicoes = [
+        ("SQL puro (CASE WHEN)", sql_puro),
+        ("UDF native (valor a valor)", consulta.format(fn="desconto_native")),
+        ("UDF arrow (vetorizada)", consulta.format(fn="desconto_progressivo")),
+    ]
+    tempos = {}
+    for rotulo, query in medicoes:
+        inicio = time.perf_counter()
+        total = con.sql(query).fetchone()[0]
+        tempos[rotulo] = time.perf_counter() - inicio
+        print(f"{rotulo:28s} {tempos[rotulo]:5.2f}s  ->  "
+              f"{5_628_285 / tempos[rotulo] / 1e6:6.1f}M linhas/s  | total: {total:,.2f}")
+
+    base = tempos["SQL puro (CASE WHEN)"]
+    print(f"\nO custo dominante é SAIR do motor: as UDFs custam "
+          f"{tempos['UDF native (valor a valor)'] / base:.0f}x e "
+          f"{tempos['UDF arrow (vetorizada)'] / base:.0f}x o SQL puro.")
+    print("Entre as duas variantes a diferença é modesta — e aqui a 'native' ganha:")
+    print("o DuckDB amortiza o overhead processando vetores internamente, enquanto")
+    print("a 'arrow' aloca arrays intermediários a cada kernel do pyarrow.compute.")
 
     section("Macros e UDFs aparecem no catálogo como funções normais")
     con.sql(

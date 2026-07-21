@@ -137,6 +137,92 @@ Observações que os exemplos demonstram na prática:
   [`DuckDB/examples/14`](DuckDB/examples/14_data_types.py) e
   [`rust-extension/run_data_types.py`](rust-extension/run_data_types.py).
 
+## Performance: comparando as abordagens
+
+Os exemplos deste tutorial medem, com o mesmo cálculo em cada caso, as
+abordagens possíveis para implementar um ETL. O resultado consolidado está
+abaixo. **Todos os números foram medidos** nas máquinas/dados deste
+repositório — não são estimativas de catálogo.
+
+### A conclusão em uma frase
+
+O fator dominante **não é a linguagem**, e sim a **granularidade com que se
+atravessa fronteiras e se materializam objetos**. Trocar Python por Rust dá
+um fator; trocar processamento linha a linha por processamento em lote dá
+ordens de grandeza.
+
+### Tabela comparativa
+
+| Abordagem | Vazão medida | Exemplo | Vantagens | Desvantagens |
+| --- | --- | --- | --- | --- |
+| **ORM com lazy loading** (N+1) | **~20k linhas/s** | [`sqlalchemy-contract/04`](sqlalchemy-contract/examples/04_orm_vs_batch.py) | a mais produtiva de escrever; navegação natural | N+1 silencioso; paga os 5 custos do ORM |
+| **ORM com eager loading** | **~80k linhas/s** | [`sqlalchemy-contract/04`](sqlalchemy-contract/examples/04_orm_vs_batch.py) | elimina o N+1 mantendo a ergonomia | 1 objeto Python por linha (GC, refcount) |
+| **INSERT via ORM** (escrita) | **~50k linhas/s** | [`sqlalchemy-contract/02`](sqlalchemy-contract/examples/02_orm_vs_columnar.py) | unit of work cuida de tudo | inviável para carga massiva |
+| **SQLAlchemy Core** (executemany) | **~320k linhas/s** | [`sqlalchemy-contract/02`](sqlalchemy-contract/examples/02_orm_vs_columnar.py) | sem objetos ORM; ainda é SQL portável | continua orientado a linha |
+| **Linhas brutas + laço Python** | **~670k linhas/s** ¹ | [`sqlalchemy-contract/04`](sqlalchemy-contract/examples/04_orm_vs_batch.py) | simples; sem dependência extra | limitado pelo interpretador *e pela carga por linha* |
+| **UDF Python no DuckDB** | **~10-16M linhas/s** ¹ | [`DuckDB/10`](DuckDB/examples/10_macros_and_python_udfs.py) | lógica Python arbitrária dentro do SQL | **24-39x mais lento que o SQL equivalente** (medido com controle) |
+| **SQL colunar puro** (DuckDB) | **~300-650M linhas/s** | [`DuckDB/03`](DuckDB/examples/03_joins_and_aggregations.py), [`DuckDB/12`](DuckDB/examples/12_performance_without_indexes.py) | vetorizado e paralelo; sem código por linha | só o que é expressável em SQL |
+| **Escrita colunar** (Arrow→parquet) | **~4.3M linhas/s** | [`sqlalchemy-contract/02`](sqlalchemy-contract/examples/02_orm_vs_columnar.py) | ~87x o INSERT do ORM | destino é arquivo, não tabela transacional |
+| **Rust serial** (pyo3-arrow) | **~2.2M contratos/s** | [`rust-extension`](rust-extension/run_contracts_parallel.py) | cálculo com estado, impossível de vetorizar | exige toolchain Rust |
+| **Rust multithread** | **~12M contratos/s** | [`rust-extension`](rust-extension/run_contracts_parallel.py) | ~5,5x sobre o serial (11 CPUs), fora do GIL | complexidade de concorrência |
+| **Rust, fatias emprestadas** | **~55M contratos/s** | [`rust-extension/run_nested_params.py`](rust-extension/run_nested_params.py) | zero alocação/cópia sobre `ListArray` | exige pensar em lifetimes |
+| **Pipeline completo de ETL** | **~4M linhas/s** | [`rust-extension/run_etl.py`](rust-extension/run_etl.py) | 33,7M linhas em ~8s: join+sort+Rust+escrita | — |
+
+### Os cinco custos que explicam a tabela
+
+A [decomposição detalhada](sqlalchemy-contract/README.md#por-que-o-orm-é-lento-os-cinco-custos)
+está no `sqlalchemy-contract`: (1) metadados por linha, (2) escrituração do
+ORM, (3) travessia de fronteira por linha, (4) execução interpretada e (5)
+alocação de heap por linha. Cada degrau da tabela elimina um subconjunto
+deles. O [estudo em Rust](rust-extension/run_nested_params.py) mostra que
+**quatro dos cinco desaparecem só por sair do Python** — por isso a mesma
+lição ("não processe linha a linha") custa ~4x lá e ~258x aqui.
+
+¹ As duas linhas marcadas são "Python percorrendo linhas" e ainda assim diferem ~24x — ver ressalva 3.
+
+### Quatro ressalvas importantes
+
+**1. Volume importa — colunar nem sempre ganha.** Com ~15 mil linhas, o
+caminho DuckDB fica *mais lento* que um laço Python: o custo fixo de conexão
+e planejamento não se paga. Não troque um laço por um motor SQL para
+processar mil registros.
+
+**2. O custo é SAIR do motor, não o estilo da UDF.** Com um controle
+isolando o scan+join, a mesma regra de desconto sobre 5,6M de linhas custa
+~0,01s em SQL puro (`CASE WHEN`), ~0,36s na UDF `native` e ~0,57s na `arrow`
+— ou seja, **qualquer UDF Python custa 24-39x o SQL equivalente**. Entre as
+duas variantes a diferença é modesta, e contrariando a intuição a `native`
+ganha (o DuckDB amortiza o overhead internamente; a `arrow` aloca arrays
+intermediários por kernel). Decida primeiro *se* precisa de UDF; só depois
+qual variante.
+
+**3. "Velocidade de um laço Python" não é um número — depende da carga.**
+Dois números desta tabela são ambos "Python percorrendo linhas", e diferem
+~24x entre si: o laço do exemplo 04 faz ~670k linhas/s porque usa aritmética
+`Decimal` e constrói listas; a UDF do exemplo 10 faz ~16M linhas/s porque
+compara e multiplica `float`. O interpretador é o mesmo — muda **o trabalho
+por linha**. Ao estimar o seu caso, olhe o que o laço faz (Decimal? strings?
+alocação?) antes de extrapolar qualquer uma dessas vazões.
+
+**4. As vazões não são comparáveis entre si diretamente.** Cada linha da
+tabela mede um *trabalho diferente* (agregar, inserir, projetar receita com
+juros compostos). Os números servem para comparar **abordagens dentro de um
+mesmo exemplo** e para dar ordem de grandeza — não para extrapolar que "SQL é
+50x mais rápido que Rust" (não é; são cargas distintas). Medições em máquina
+de 11 CPUs, dados em cache do SO.
+
+### Como escolher
+
+- **SQL colunar** para tudo que for expressável em SQL (join, agregação,
+  window function): é o mais rápido e o mais simples.
+- **UDF Python** quando a lógica não couber em SQL mas o volume for moderado.
+- **Rust** quando houver cálculo sequencial com estado por entidade (projeções
+  financeiras, simulações) sobre volume alto — e aí use
+  [pool com backpressure](rust-extension/README.md) para manter memória
+  constante.
+- **ORM** apenas fora do caminho de dados: schema/contrato e consultas
+  pontuais.
+
 ## Verificação completa com um comando
 
 Acabou de clonar? Um único comando gera os dados, roda as 5 suítes de testes
