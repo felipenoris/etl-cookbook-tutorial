@@ -1,8 +1,15 @@
 """Exemplo 10 — Macros SQL e UDFs Python (linha a linha e vetorizada via Arrow).
 
-Como encapsular lógica reutilizável — o papel que stored procedures e
-functions cumprem numa base transacional. O DuckDB não tem stored procedures;
-tem dois mecanismos mais simples, cada um com seu lugar:
+Uma **UDF** (*User-Defined Function*, "função definida pelo usuário") é uma
+função escrita por você e registrada no motor SQL para ser chamada de dentro
+de uma consulta, como se fosse uma função embutida (`UPPER`, `ROUND`...). No
+DuckDB, uma UDF pode ser escrita em Python (`con.create_function`) — é o que
+permite injetar lógica que o SQL não expressa nativamente no meio de uma
+query, ao custo de sair do motor para o Python (medido adiante).
+
+Este exemplo cobre como encapsular lógica reutilizável — o papel que stored
+procedures e functions cumprem numa base transacional. O DuckDB não tem stored
+procedures; tem dois mecanismos mais simples, cada um com seu lugar:
 
 `CREATE MACRO nome(args) AS expressão`
     Macro **escalar**: um nome para uma expressão SQL. Diferente de uma

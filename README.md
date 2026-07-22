@@ -153,6 +153,19 @@ ordens de grandeza.
 
 ### Tabela comparativa
 
+Três siglas aparecem abaixo:
+
+- **UDF** (*User-Defined Function*) — função escrita por você e registrada no
+  motor SQL para ser chamada de dentro de uma consulta; no DuckDB, pode ser em
+  Python, injetando lógica que o SQL não expressa nativamente (ver
+  [`DuckDB/10`](DuckDB/examples/10_macros_and_python_udfs.py)).
+- **N+1** — a armadilha do ORM em que carregar N registros relacionados dispara
+  uma query inicial *mais uma query por registro* (1 + N idas ao banco), em vez
+  de trazer tudo de uma vez (ver [`sqlalchemy-contract/04`](sqlalchemy-contract/examples/04_orm_vs_batch.py)).
+- **GIL** (*Global Interpreter Lock*) — o mecanismo do CPython que permite só
+  uma thread executar bytecode Python por vez; código Rust nativo pode
+  liberá-lo e assim rodar em paralelo de verdade (ver [`rust-extension`](rust-extension/README.md)).
+
 | Abordagem | Vazão medida | Exemplo | Vantagens | Desvantagens |
 | --- | --- | --- | --- | --- |
 | **ORM com lazy loading** (N+1) | **~20k linhas/s** | [`sqlalchemy-contract/04`](sqlalchemy-contract/examples/04_orm_vs_batch.py) | a mais produtiva de escrever; navegação natural | N+1 silencioso; paga os 5 custos do ORM |

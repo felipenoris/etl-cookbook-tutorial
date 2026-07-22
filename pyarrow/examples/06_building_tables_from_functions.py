@@ -6,7 +6,7 @@ Conceitos:
 - Construção explícita de um `RecordBatch` com schema definido manualmente
   (útil quando se quer controlar tipos com precisão, ex.: antes de repassar
   para uma extensão Rust, como na etapa `rust-extension/`).
-- UDF em Python puro aplicada com list comprehension + `pa.array(...)` —
+- UDF (função definida pelo usuário) em Python puro aplicada com list comprehension + `pa.array(...)` —
   mais lento que `pyarrow.compute`, mas às vezes é a única opção para lógica
   arbitrária que não existe como função vetorizada pronta.
 - `Table.from_batches` / `Table.from_pylist` como outras formas de construção.

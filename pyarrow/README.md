@@ -20,7 +20,7 @@ uv sync
 | `03_data_cleaning.py` | `is_null`/`fill_null`/`drop_null`, `value_counts`, `dictionary_encode` |
 | `04_groupby_aggregation.py` | `Table.group_by(...).aggregate(...)`, múltiplas chaves, `count_distinct` |
 | `05_joins.py` | `Table.join` (inner/left outer), join encadeado de 3 tabelas |
-| `06_building_tables_from_functions.py` | `pa.table`, `RecordBatch` manual, UDF Python + `pa.array`, `from_pylist`/`from_batches` |
+| `06_building_tables_from_functions.py` | `pa.table`, `RecordBatch` manual, função Python (UDF) + `pa.array`, `from_pylist`/`from_batches` |
 | `07_sorting_and_pivot_like.py` | `sort_by`, `pc.rank`, "pivot" manual via `group_by` + reshape |
 | `08_pandas_interop.py` | Table -> DataFrame (`types_mapper=pd.ArrowDtype`, zero-copy provado por endereço de buffer) e DataFrame -> Table (`from_pandas`, `preserve_index`), roundtrip fiel |
 | `09_hybrid_pandas_etl.py` | padrão híbrido: `to_batches` (streaming), lógica de negócio em pandas puro, `ParquetWriter` incremental, `delete_matching` (recarga idempotente) |
