@@ -51,7 +51,8 @@ jobs:
       - name: Gerar documentação Python (pdoc)
         working-directory: rust-extension
         run: |
-          uv run pdoc --math --mermaid --docformat google --output-dir docs \
+          uv run pdoc --math --mermaid --docformat google --template-dir pdoc-templates \
+            --output-dir docs \
             etl_rust_ext ./run_etl.py ./run_contracts_parallel.py \
             ./run_data_types.py ./run_nested_params.py ./docs_demo.py
 

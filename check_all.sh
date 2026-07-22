@@ -59,7 +59,7 @@ step 8/9 "sqlalchemy-contract: suíte pytest (contrato, ORM vs colunar/lote, hie
 
 step 9/9 "Documentação: doctest do docs_demo, pdoc (docs/) e cargo doc (target/doc/)"
 (cd rust-extension && uv run python -m doctest docs_demo.py -v > /dev/null)
-(cd rust-extension && uv run pdoc --math --mermaid --docformat google --output-dir docs \
+(cd rust-extension && uv run pdoc --math --mermaid --docformat google --template-dir pdoc-templates --output-dir docs \
     etl_rust_ext ./run_etl.py ./run_contracts_parallel.py ./run_data_types.py ./run_nested_params.py ./docs_demo.py)
 (cd rust-extension && cargo doc --no-deps --document-private-items)
 

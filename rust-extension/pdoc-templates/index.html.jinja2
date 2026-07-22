@@ -1,0 +1,63 @@
+{#
+Home customizada da documentação Python (pdoc).
+
+Estende o template padrão do pdoc e preenche o `<main>` — que por padrão fica
+vazio quando se documenta vários módulos de topo sem pacote-pai comum — com uma
+visão geral do projeto. A busca (bloco `content`, reproduzida abaixo) e a lista
+de módulos à esquerda (bloco `nav`, herdado) continuam funcionando.
+#}
+{% extends "default/index.html.jinja2" %}
+
+{% block title %}ETL Cookbook Tutorial — documentação Python{% endblock %}
+
+{% block content %}
+    <header class="pdoc">
+        {% if search %}
+            <input type="search" placeholder="Buscar na documentação..." aria-label="search box">
+        {% endif %}
+    </header>
+    <main class="pdoc" style="display:block">
+        <section>
+            <h1>ETL Cookbook Tutorial — documentação Python</h1>
+            <p>
+                Referência da extensão Rust <code>etl_rust_ext</code> (construída com
+                PyO3 + pyo3-arrow, para passagem <em>zero-copy</em> de dados Arrow entre
+                Python e Rust) e dos scripts do pipeline de ETL que a exercitam. Esta é a
+                metade Python da documentação; a documentação do crate Rust, gerada por
+                <code>cargo doc</code>, fica no mesmo site (veja os links no rodapé).
+            </p>
+
+            <h2>Módulos documentados</h2>
+            <ul>
+                <li><code>etl_rust_ext</code> — a API da extensão compilada, vista do
+                    lado Python: enriquecimento de <code>RecordBatch</code>, gasto
+                    acumulado por cliente e materialização 1:N.</li>
+                <li><code>run_etl</code> — o pipeline completo de ponta a ponta:
+                    DuckDB → pyarrow → Rust → pandas → parquet.</li>
+                <li><code>run_contracts_parallel</code> — projeção em paralelo de
+                    contratos com a extensão Rust (liberando o GIL — Global Interpreter
+                    Lock).</li>
+                <li><code>run_data_types</code> — roundtrip de tipos Arrow entre Python
+                    e Rust (inteiros, decimais, datas, aninhados).</li>
+                <li><code>run_nested_params</code> — materialização 1:N sobre
+                    <code>ListArray</code> (um contrato com N parâmetros).</li>
+                <li><code>docs_demo</code> — vitrine dos recursos de documentação do
+                    pdoc: fórmulas (<code>--math</code>), diagramas mermaid
+                    (<code>--mermaid</code>) e docstring dinâmica.</li>
+            </ul>
+
+            <p>
+                Navegue pela busca acima ou pela lista de módulos à esquerda. O tutorial
+                completo (pandas, pyarrow, DuckDB, SQLAlchemy e a extensão Rust) e a
+                documentação do crate Rust estão em:
+            </p>
+            <ul>
+                <li><a href="https://felipenoris.github.io/etl-cookbook-tutorial/">Página inicial da documentação</a> (liga a parte Python e a Rust)</li>
+                <li><a href="https://github.com/felipenoris/etl-cookbook-tutorial">Código-fonte no GitHub</a></li>
+            </ul>
+        </section>
+    </main>
+    {% if search %}
+        {% include "search.html.jinja2" %}
+    {% endif %}
+{% endblock %}
