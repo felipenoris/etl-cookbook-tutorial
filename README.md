@@ -1,5 +1,7 @@
 # ETL Cookbook Tutorial
 
+[![CI](https://github.com/felipenoris/etl-cookbook-tutorial/actions/workflows/ci.yml/badge.svg)](https://github.com/felipenoris/etl-cookbook-tutorial/actions/workflows/ci.yml)
+
 Projeto didático com exemplos independentes exercitando etapas específicas de
 um pipeline de ETL de dados, cada um em seu próprio projeto Python isolado
 (gerenciado com [`uv`](https://docs.astral.sh/uv/)), lendo a mesma base de
@@ -258,6 +260,15 @@ Rust, caches), voltando ao estado pós-clone:
 ./clean_all.sh          # limpa artefatos gerados (mantém os .venv)
 ./clean_all.sh --all    # também remove os .venv e uv.lock (estado pós-clone)
 ```
+
+### Integração contínua (GitHub Actions)
+
+O workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) roda esse
+mesmo `./check_all.sh` a cada push na `main` e em cada pull request (instalando
+`uv` e a toolchain Rust, com cache): testes das 5 suítes, todos os exemplos,
+os pipelines e a geração de documentação. O HTML gerado (pdoc + rustdoc) é
+publicado como artefato baixável da execução. O status aparece no badge no
+topo deste README.
 
 ## Por onde começar
 

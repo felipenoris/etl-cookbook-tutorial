@@ -1,0 +1,69 @@
+name: CI
+
+# Dispara em push na main e em branches de trabalho `claude/**` (para testar a
+# CI numa branch antes do merge), em qualquer pull request e sob demanda (botão
+# "Run workflow" na aba Actions).
+on:
+  push:
+    branches: [main, 'claude/**']
+  pull_request:
+  workflow_dispatch:
+
+# Cancela execuções antigas do mesmo ref quando um novo push chega.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-all:
+    name: Testes + exemplos + documentação
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # uv gerencia todo o lado Python: baixa o interpretador de cada projeto,
+      # resolve as dependências e o maturin, e roda os pytest. enable-cache
+      # guarda o cache do uv entre execuções.
+      - name: Instalar uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # Toolchain Rust para compilar a extensão PyO3 (via maturin) e gerar o
+      # rustdoc no passo de documentação do check_all.sh.
+      - name: Instalar toolchain Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Cache do registry e do build Rust (target/) para acelerar recompilações.
+      - name: Cache do build Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust-extension
+
+      # check_all.sh faz tudo em sequência: gera os dados fictícios, roda as 5
+      # suítes pytest (cujos smoke tests executam TODOS os scripts de examples/),
+      # executa os scripts standalone do rust-extension e gera as documentações
+      # (doctest + pdoc + cargo doc). Qualquer falha derruba o job.
+      #
+      # Os runners do GitHub têm internet, então rodamos a suíte COMPLETA,
+      # incluindo os 3 testes do DuckDB que leem buckets S3 públicos (exemplo
+      # 13). Se esses acessos externos causarem instabilidade, troque por
+      # `./check_all.sh --no-network`.
+      - name: Rodar verificação completa
+        run: ./check_all.sh
+
+      # Publica o HTML gerado (pdoc + rustdoc) como artefato baixável da
+      # execução — útil para revisar a documentação sem rodar nada localmente.
+      - name: Publicar documentação gerada
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: documentacao-html
+          path: |
+            rust-extension/docs
+            rust-extension/target/doc
+          if-no-files-found: ignore
+          retention-days: 14
