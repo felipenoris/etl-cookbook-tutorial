@@ -47,7 +47,7 @@ uv sync
 | `04_memory_limit_and_spill.py` | `memory_limit`, `temp_directory`, forçando spill num sort/aggregate grande |
 | `05_pandas_arrow_interop.py` | `.arrow()`/`.df()`, handoff zero-copy com pyarrow e pandas (backend Arrow) |
 | `06_copy_to_partitioned.py` | `COPY TO` com `PARTITION_BY`, recarga idempotente de partição, `FILE_SIZE_BYTES` |
-| `07_persistent_staging_upsert.py` | banco persistente (`.db`), CTAS, `ATTACH` entre bancos, UPSERT (`ON CONFLICT`) |
+| `07_persistent_staging_upsert.py` | banco persistente (`.db`), CTAS, `ATTACH` entre bancos, UPSERT (`ON CONFLICT`); paleta de DDL (constraints, `DEFAULT`, coluna gerada, `SEQUENCE`, `CREATE INDEX`, `ALTER`) e a comparação com os parâmetros estilo Hive (`PARTITIONED BY`/`LOCATION`) |
 | `08_ingestion_and_quality.py` | `read_csv` com sniffer, quarentena (`store_rejects`/`reject_errors`), `SUMMARIZE`, `USING SAMPLE` |
 | `09_advanced_sql_transforms.py` | `WITH RECURSIVE` (hierarquia), `PIVOT`/`UNPIVOT`, `ASOF JOIN`, `LIST`/`UNNEST` |
 | `10_macros_and_python_udfs.py` | `CREATE MACRO` (escalar e de tabela), UDF Python (função definida pelo usuário) nativa vs. vetorizada (`type="arrow"`) |
@@ -56,6 +56,7 @@ uv sync
 | `13_reading_public_s3.py` | parquet remoto via httpfs: `https://` e `s3://` anônimo (`CREATE SECRET`), range requests, join remoto, glob hive no S3 — **exige internet** (~2MB) |
 | `14_data_types.py` | BOOLEAN/TIMESTAMP/DECIMAL(12,2)/STRUCT/LIST/MAP/BLOB: notação de ponto, `[1]`, `map['chave']`, `typeof`, roundtrip COPY |
 | `15_sequential_stateful_loop.py` | lógica sequencial com estado, em lotes (streaming), no lado Python — o análogo do `compute_customer_running_spend` do Rust, exercitando a API mesmo sem performar (via `to_arrow_reader` + estado; contraste com `SUM` agrupado) |
+| `16_join_performance.py` | JOIN sem agregação: por que índice ART NÃO acelera join (é hash join), e o que acelera de fato — pushdown do filtro até o fato + zonemaps do fato ordenado (medido) |
 
 ## Performance sem índices (exemplo 12)
 
@@ -71,8 +72,25 @@ escrita:
   groups fora da faixa — no exemplo, a consulta pontual abre 1 de 275 row
   groups e fica ~8x mais rápida, com o mesmíssimo dado;
 - **JOINs não precisam de índice**: o DuckDB usa hash join (a dimensão vira
-  hash table em memória na hora);
+  hash table em memória na hora) — ver o exemplo 16, que mede que `CREATE
+  INDEX` não muda o plano nem o tempo de um join;
 - o custo é pago 1x no ETL que grava; toda leitura posterior aproveita.
+
+## Performance de JOIN e índices (exemplo 16)
+
+Aprofunda a preocupação mais comum ao adotar DuckDB — *"joins complexos serão
+rápidos sem os índices que eu criaria no Postgres?"*. Medições no exemplo 16:
+
+- **índice ART NÃO acelera JOIN**: o plano é sempre `HASH_JOIN`; criar um
+  índice na chave do join não muda o plano nem o tempo (ele serve a
+  point-lookup por `WHERE` direto e a constraints, não a joins);
+- **join que varre tudo**: o hash join já é rápido, paralelo e vetorizado —
+  não precisa de tuning;
+- **join seletivo**: são duas camadas, medidas separadamente — (1) *pushdown*,
+  o predicado seletivo precisa **alcançar o fato** (o filtro na dimensão não
+  vira filtro do fato sozinho; replique-o na chave do join), e (2) *zonemaps*,
+  o fato precisa estar **ordenado na escrita** pela coluna filtrada para o
+  scan pular row groups (o mecanismo do exemplo 12).
 
 ```bash
 uv run examples/01_connecting_and_querying.py

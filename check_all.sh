@@ -40,7 +40,7 @@ step 2/9 "pandas: suíte pytest (os smoke tests executam os 10 exemplos)"
 step 3/9 "pyarrow: suíte pytest (11 exemplos)"
 (cd pyarrow && uv run pytest)
 
-step 4/9 "DuckDB: suíte pytest (15 exemplos)"
+step 4/9 "DuckDB: suíte pytest (16 exemplos)"
 (cd DuckDB && uv run pytest $DUCKDB_FLAGS)
 
 step 5/9 "rust-extension: suíte pytest (compila a extensão via maturin no 1º uso)"
