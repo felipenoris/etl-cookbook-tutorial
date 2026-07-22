@@ -27,6 +27,7 @@ Cada arquivo em `examples/` é independente e roda com `uv run`:
 | `07_index_manipulation.py` | `set_index`/`reset_index`, `MultiIndex`, `sort_index`, `stack`/`unstack`, `reindex` |
 | `08_window_and_time.py` | `resample`, `rolling`, `cumsum`/`cumcount` |
 | `09_arrow_data_types.py` | tipos Arrow no pandas: bool, timestamp, decimal(12,2), list/struct (acessores), map (escotilha pyarrow), binary, roundtrip |
+| `10_sequential_stateful_loop.py` | lógica sequencial com estado, em lotes (streaming), no lado Python — o análogo do `compute_customer_running_spend` do Rust, exercitando a API mesmo sem performar (via `itertuples` + estado; contraste com `groupby().cumsum()`) |
 
 ```bash
 uv run examples/01_loading_and_dtypes.py

@@ -25,6 +25,7 @@ uv sync
 | `08_pandas_interop.py` | Table -> DataFrame (`types_mapper=pd.ArrowDtype`, zero-copy provado por endereço de buffer) e DataFrame -> Table (`from_pandas`, `preserve_index`), roundtrip fiel |
 | `09_hybrid_pandas_etl.py` | padrão híbrido: `to_batches` (streaming), lógica de negócio em pandas puro, `ParquetWriter` incremental, `delete_matching` (recarga idempotente) |
 | `10_data_types.py` | todos os tipos da stack: decimal(12,2) exato, list/struct/map (kernels), binary, construção manual e roundtrip parquet |
+| `11_sequential_stateful_loop.py` | lógica sequencial com estado, em lotes (streaming), no lado Python — o análogo do `compute_customer_running_spend` do Rust, exercitando a API mesmo sem performar (via `Table.to_batches` + estado; contraste com `group_by/sum`) |
 
 ```bash
 uv run examples/01_reading_partitioned_datasets.py

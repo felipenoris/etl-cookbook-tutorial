@@ -55,6 +55,7 @@ uv sync
 | `12_performance_without_indexes.py` | o "índice" do mundo parquet: partition pruning + `ORDER BY` na escrita (zonemaps/`parquet_metadata`), leitura colunar, hash join sem índice |
 | `13_reading_public_s3.py` | parquet remoto via httpfs: `https://` e `s3://` anônimo (`CREATE SECRET`), range requests, join remoto, glob hive no S3 — **exige internet** (~2MB) |
 | `14_data_types.py` | BOOLEAN/TIMESTAMP/DECIMAL(12,2)/STRUCT/LIST/MAP/BLOB: notação de ponto, `[1]`, `map['chave']`, `typeof`, roundtrip COPY |
+| `15_sequential_stateful_loop.py` | lógica sequencial com estado, em lotes (streaming), no lado Python — o análogo do `compute_customer_running_spend` do Rust, exercitando a API mesmo sem performar (via `to_arrow_reader` + estado; contraste com `SUM` agrupado) |
 
 ## Performance sem índices (exemplo 12)
 

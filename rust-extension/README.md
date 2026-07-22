@@ -58,6 +58,12 @@ durante o build. Qualquer mudança em `src/lib.rs` exige rodar `uv sync` (ou
   — exemplo que justifica sair do domínio vetorizado: acumula o gasto por
   cliente num único loop sequencial com estado (`HashMap<customer_id, total>`)
   e classifica um tier (bronze/prata/ouro) segundo os thresholds informados.
+  O MESMO cálculo aparece em Python puro nos exemplos "sequential_stateful_loop"
+  de [`../pandas`](../pandas/examples/10_sequential_stateful_loop.py),
+  [`../pyarrow`](../pyarrow/examples/11_sequential_stateful_loop.py) e
+  [`../DuckDB`](../DuckDB/examples/15_sequential_stateful_loop.py) — que
+  exercitam a API de streaming de cada biblioteca e mostram por que esse caso
+  (lógica sequencial que não vetoriza) é onde uma extensão nativa compensa.
 - `project_revenue_batch(batch)` / classes `ParallelRevenueProjector` (paralelo
   simples) e `BoundedRevenueProjector` (memória constante: pool fixo + fila
   limitada + escrita incremental em parquet) — projeção de receita de
