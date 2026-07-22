@@ -69,11 +69,10 @@ jobs:
           cp .github/pages/index.html _site/index.html
           touch _site/.nojekyll
 
-      # Habilita o Pages (se ainda não estiver) e prepara o upload do artefato.
+      # Prepara o upload do artefato. O Pages precisa estar habilitado no repo
+      # (Settings > Pages > Source: GitHub Actions) — feito uma vez, manualmente.
       - name: Configurar GitHub Pages
         uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       - name: Enviar artefato do Pages
         uses: actions/upload-pages-artifact@v3
