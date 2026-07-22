@@ -1,10 +1,15 @@
 {#
 Home customizada da documentação Python (pdoc).
 
-Estende o template padrão do pdoc e preenche o `<main>` — que por padrão fica
-vazio quando se documenta vários módulos de topo sem pacote-pai comum — com uma
-visão geral do projeto. A busca (bloco `content`, reproduzida abaixo) e a lista
-de módulos à esquerda (bloco `nav`, herdado) continuam funcionando.
+Estende o template padrão e preenche o `<main>` — que fica vazio quando os
+módulos documentados não têm pacote-pai comum — com uma visão geral do projeto.
+O conteúdo é escrito em **Markdown** e passado pelo filtro `to_html` do próprio
+pdoc (o mesmo que renderiza as docstrings), então tem realce de sintaxe e
+suporte a ```mermaid``` (o frame carrega o JS do mermaid porque `--mermaid` está
+ligado). Nota: o Markdown DEVE ficar alinhado à esquerda dentro do bloco
+`{% filter %}`; indentar faria o markdown2 tratá-lo como bloco de código. Usa-se
+só `to_html` (não `to_markdown`), que na index não tem um `module` no contexto.
+A busca e a lista de módulos à esquerda continuam vindo dos blocos herdados.
 #}
 {% extends "default/index.html.jinja2" %}
 
@@ -17,45 +22,87 @@ de módulos à esquerda (bloco `nav`, herdado) continuam funcionando.
         {% endif %}
     </header>
     <main class="pdoc" style="display:block">
-        <section>
-            <h1>ETL Cookbook Tutorial — documentação Python</h1>
-            <p>
-                Referência da extensão Rust <code>etl_rust_ext</code> (construída com
-                PyO3 + pyo3-arrow, para passagem <em>zero-copy</em> de dados Arrow entre
-                Python e Rust) e dos scripts do pipeline de ETL que a exercitam. Esta é a
-                metade Python da documentação; a documentação do crate Rust, gerada por
-                <code>cargo doc</code>, fica no mesmo site (veja os links no rodapé).
-            </p>
+{% filter to_html %}
+# ETL Cookbook Tutorial — documentação Python
 
-            <h2>Módulos documentados</h2>
-            <ul>
-                <li><code>etl_rust_ext</code> — a API da extensão compilada, vista do
-                    lado Python: enriquecimento de <code>RecordBatch</code>, gasto
-                    acumulado por cliente e materialização 1:N.</li>
-                <li><code>run_etl</code> — o pipeline completo de ponta a ponta:
-                    DuckDB → pyarrow → Rust → pandas → parquet.</li>
-                <li><code>run_contracts_parallel</code> — projeção em paralelo de
-                    contratos com a extensão Rust (liberando o GIL — Global Interpreter
-                    Lock).</li>
-                <li><code>run_data_types</code> — roundtrip de tipos Arrow entre Python
-                    e Rust (inteiros, decimais, datas, aninhados).</li>
-                <li><code>run_nested_params</code> — materialização 1:N sobre
-                    <code>ListArray</code> (um contrato com N parâmetros).</li>
-                <li><code>docs_demo</code> — vitrine dos recursos de documentação do
-                    pdoc: fórmulas (<code>--math</code>), diagramas mermaid
-                    (<code>--mermaid</code>) e docstring dinâmica.</li>
-            </ul>
+Referência da extensão Rust `etl_rust_ext` (construída com PyO3 + pyo3-arrow, para
+passagem *zero-copy* de dados Arrow entre Python e Rust) e dos scripts do pipeline de
+ETL que a exercitam. Esta é a metade Python da documentação; a documentação do crate
+Rust, gerada por `cargo doc`, fica no mesmo site (veja os links no fim da página).
 
-            <p>
-                Navegue pela busca acima ou pela lista de módulos à esquerda. O tutorial
-                completo (pandas, pyarrow, DuckDB, SQLAlchemy e a extensão Rust) e a
-                documentação do crate Rust estão em:
-            </p>
-            <ul>
-                <li><a href="https://felipenoris.github.io/etl-cookbook-tutorial/">Página inicial da documentação</a> (liga a parte Python e a Rust)</li>
-                <li><a href="https://github.com/felipenoris/etl-cookbook-tutorial">Código-fonte no GitHub</a></li>
-            </ul>
-        </section>
+## Fluxo de dados do ETL ideal
+
+O pipeline ideal deste tutorial processa bases **maiores que a RAM** mantendo o uso de
+memória **constante**: lê em *streaming*, transforma num pool fixo de threads no Rust
+(com o GIL — Global Interpreter Lock — solto) e grava o resultado em disco
+incrementalmente. É o desenho do `BoundedRevenueProjector` (detalhado em
+`run_contracts_parallel`), aqui visto como Extract → Transform → Load:
+
+```mermaid
+flowchart LR
+    SRC[("data/raw\nparquet particionado\n(pode exceder a RAM)")]
+    subgraph MEM["residente na RAM — LIMITADO (não cresce com a base)"]
+        direction LR
+        RD["Extract\nleitura em streaming\n1 RecordBatch por vez"]
+        Q(["fila de entrada\nLIMITADA\ncap = queue_depth"])
+        subgraph POOL["Transform — pool FIXO de N workers (Rust)"]
+            direction TB
+            W1["worker 1\nGIL solto · Arc zero-copy"]
+            W2["worker 2"]
+            Wn["worker N"]
+        end
+        RQ(["fila de resultados\nLIMITADA"])
+    end
+    WR["Load\nthread escritora\nArrowWriter (incremental)"]
+    DST[("data/rich\nparquet em DISCO\ncresce fora da RAM")]
+    SRC -->|"1 lote por vez"| RD
+    RD --> Q
+    Q --> W1
+    Q --> W2
+    Q --> Wn
+    W1 --> RQ
+    W2 --> RQ
+    Wn --> RQ
+    RQ --> WR
+    WR -->|"escreve 1 lote por vez"| DST
+    Q -. "fila cheia → produtor espera (backpressure)" .-> RD
+```
+
+Só o retângulo **MEM** fica residente na RAM, e seu tamanho é fixo
+(`≈ queue_depth + N lotes`), não proporcional à base. Três mecanismos garantem isso:
+
+1. **Fila de entrada limitada** — quando enche, o produtor bloqueia (*backpressure*, a
+   aresta pontilhada de volta): a base não é despejada de uma vez na memória.
+2. **Pool fixo de N workers** — no máximo N lotes em processamento a qualquer instante,
+   não uma thread por lote.
+3. **Escrita incremental** — a saída sai da RAM continuamente; o parquet de destino
+   cresce em disco, fora do retângulo MEM.
+
+O contraste com a versão *sem* limite de memória (`ParallelRevenueProjector`, que acumula
+lotes em voo) está documentado em `run_contracts_parallel`.
+
+## Módulos documentados
+
+- `etl_rust_ext` — a API da extensão compilada, vista do lado Python: enriquecimento de
+  `RecordBatch`, gasto acumulado por cliente e materialização 1:N.
+- `run_etl` — o pipeline completo de ponta a ponta: DuckDB → pyarrow → Rust → pandas →
+  parquet.
+- `run_contracts_parallel` — projeção em paralelo de contratos com a extensão Rust, e as
+  duas estratégias de memória (com e sem limite) que o diagrama acima resume.
+- `run_data_types` — roundtrip de tipos Arrow entre Python e Rust (inteiros, decimais,
+  datas, aninhados).
+- `run_nested_params` — materialização 1:N sobre `ListArray` (um contrato com N
+  parâmetros).
+- `docs_demo` — vitrine dos recursos de documentação do pdoc: fórmulas (`--math`),
+  diagramas mermaid (`--mermaid`) e docstring dinâmica.
+
+Navegue pela busca acima ou pela lista de módulos à esquerda.
+
+## Mais
+
+- [Página inicial da documentação](https://felipenoris.github.io/etl-cookbook-tutorial/) — liga a parte Python e a Rust.
+- [Código-fonte no GitHub](https://github.com/felipenoris/etl-cookbook-tutorial).
+{% endfilter %}
     </main>
     {% if search %}
         {% include "search.html.jinja2" %}
