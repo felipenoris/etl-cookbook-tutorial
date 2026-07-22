@@ -1,0 +1,95 @@
+name: Docs
+
+# Gera as duas documentações (pdoc do lado Python + rustdoc do crate) e as
+# publica no GitHub Pages. O deploy só acontece a partir da main; em branches
+# claude/** e sob demanda apenas o build roda, para validar a geração antes do
+# merge.
+on:
+  push:
+    branches: [main, 'claude/**']
+  workflow_dispatch:
+
+# Permissões exigidas pelo fluxo oficial de deploy do GitHub Pages.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Uma publicação por vez; não cancela um deploy em andamento.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Gerar documentação
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # uv baixa o Python do rust-extension e, no primeiro `uv run`, compila a
+      # extensão via maturin — necessário porque o pdoc importa `etl_rust_ext`.
+      - name: Instalar uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # Toolchain Rust: compila a extensão (para o pdoc) e gera o rustdoc.
+      - name: Instalar toolchain Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache do build Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust-extension
+
+      # pdoc importa os módulos para introspecção; nenhum deles lê data/raw em
+      # tempo de import (o pipeline fica sob `if __name__ == "__main__"`), então
+      # NÃO é preciso gerar os dados fictícios aqui.
+      - name: Gerar documentação Python (pdoc)
+        working-directory: rust-extension
+        run: |
+          uv run pdoc --math --mermaid --docformat google --output-dir docs \
+            etl_rust_ext ./run_etl.py ./run_contracts_parallel.py \
+            ./run_data_types.py ./run_nested_params.py ./docs_demo.py
+
+      - name: Gerar documentação Rust (cargo doc)
+        working-directory: rust-extension
+        run: cargo doc --no-deps --document-private-items
+
+      # Monta o site: página inicial na raiz, pdoc em /python, rustdoc em /rust.
+      # .nojekyll evita qualquer processamento Jekyll de caminhos com underscore.
+      - name: Montar site (_site/)
+        run: |
+          mkdir -p _site/python _site/rust
+          cp -r rust-extension/docs/. _site/python/
+          cp -r rust-extension/target/doc/. _site/rust/
+          cp .github/pages/index.html _site/index.html
+          touch _site/.nojekyll
+
+      # Prepara o upload do artefato. O Pages precisa estar habilitado no repo
+      # (Settings > Pages > Source: GitHub Actions) — feito uma vez, manualmente.
+      - name: Configurar GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Enviar artefato do Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    name: Publicar no GitHub Pages
+    needs: build
+    # Só a main publica no site ao vivo; branches de trabalho apenas validam o
+    # build acima.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

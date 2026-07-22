@@ -1,6 +1,9 @@
 # ETL Cookbook Tutorial
 
 [![CI](https://github.com/felipenoris/etl-cookbook-tutorial/actions/workflows/ci.yml/badge.svg)](https://github.com/felipenoris/etl-cookbook-tutorial/actions/workflows/ci.yml)
+[![Docs](https://github.com/felipenoris/etl-cookbook-tutorial/actions/workflows/docs.yml/badge.svg)](https://felipenoris.github.io/etl-cookbook-tutorial/)
+
+📖 **Documentação publicada:** <https://felipenoris.github.io/etl-cookbook-tutorial/>
 
 Projeto didático com exemplos independentes exercitando etapas específicas de
 um pipeline de ETL de dados, cada um em seu próprio projeto Python isolado
@@ -269,6 +272,14 @@ mesmo `./check_all.sh` a cada push na `main` e em cada pull request (instalando
 os pipelines e a geração de documentação. O HTML gerado (pdoc + rustdoc) é
 publicado como artefato baixável da execução. O status aparece no badge no
 topo deste README.
+
+Um segundo workflow, [`.github/workflows/docs.yml`](.github/workflows/docs.yml),
+gera as duas documentações (pdoc do lado Python + rustdoc do crate) e as
+publica no **GitHub Pages** a cada push na `main`, sem precisar gerar os dados
+fictícios (o pdoc só importa os módulos, que não leem `data/raw` em tempo de
+import). O site fica em
+<https://felipenoris.github.io/etl-cookbook-tutorial/>, com uma página inicial
+ligando a documentação Python (`/python`) e a Rust (`/rust`).
 
 ## Por onde começar
 
