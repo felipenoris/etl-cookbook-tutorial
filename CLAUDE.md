@@ -41,7 +41,6 @@ etl-cookbook-tutorial/
   sqlalchemy-contract/   # ORM-pattern migration: models as schema contract, ORM vs columnar
   check_all.sh           # one command: generate data, run all suites, build docs
   clean_all.sh           # inverse of check_all.sh: remove generated artifacts
-  push_upstream.sh       # shortcut for `git push upstream main`
   .github/workflows/     # ci.yml (runs check_all.sh) + docs.yml (publishes to GitHub Pages)
 ```
 
@@ -168,9 +167,15 @@ caching, 30-min timeout, publishes generated HTML docs as an artifact).
 
 ## Git workflow
 
-- Default branch is `main`. When asked to make changes, develop on a feature
-  branch, commit with clear pt-BR-friendly messages, and push with
-  `git push -u origin <branch>`.
-- Do **not** open a pull request unless explicitly asked.
-- `push_upstream.sh` is a personal shortcut (`git push upstream main`) for the
-  maintainer's fork setup — not part of the normal contribution flow.
+- Default branch is `main`. **Never commit directly to `main`.** Every commit an
+  AI assistant creates goes on a branch whose name is prefixed with `claude/`
+  (e.g. `claude/fix-diagram`). Create the branch first, commit there, and push
+  with `git push -u origin claude/<name>`. The maintainer reviews, merges, and
+  deletes the branch; the assistant then syncs local `main`
+  (`git checkout main && git pull origin main && git branch -D claude/<name>`).
+- Commit and/or push **only when explicitly asked**. Write clear
+  pt-BR-friendly commit messages.
+- Do **not** open a pull request unless explicitly asked (and note the assistant
+  cannot open one from the local environment anyway — no `gh`/token there).
+- Remote is `origin` (SSH). Pushing `main` is just `git push`; there is no push
+  wrapper script.
