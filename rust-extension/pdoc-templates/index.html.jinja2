@@ -39,17 +39,18 @@ incrementalmente. É o desenho do `BoundedRevenueProjector` (detalhado em
 `run_contracts_parallel`), aqui visto como Extract → Transform → Load:
 
 ```mermaid
-flowchart LR
+flowchart TB
     SRC[("data/raw\nparquet particionado\n(pode exceder a RAM)")]
     subgraph MEM["residente na RAM — LIMITADO (não cresce com a base)"]
-        direction LR
+        direction TB
         RD["Extract\nleitura em streaming\n1 RecordBatch por vez"]
         Q(["fila de entrada\nLIMITADA\ncap = queue_depth"])
         subgraph POOL["Transform — pool FIXO de N workers (Rust)"]
-            direction TB
+            direction LR
             W1["worker 1\nGIL solto · Arc zero-copy"]
             W2["worker 2"]
             Wn["worker N"]
+            W1 ~~~ W2 ~~~ Wn
         end
         RQ(["fila de resultados\nLIMITADA"])
     end
@@ -57,12 +58,8 @@ flowchart LR
     DST[("data/rich\nparquet em DISCO\ncresce fora da RAM")]
     SRC -->|"1 lote por vez"| RD
     RD --> Q
-    Q --> W1
-    Q --> W2
-    Q --> Wn
-    W1 --> RQ
-    W2 --> RQ
-    Wn --> RQ
+    Q --> POOL
+    POOL --> RQ
     RQ --> WR
     WR -->|"escreve 1 lote por vez"| DST
     Q -. "fila cheia → produtor espera (backpressure)" .-> RD
