@@ -19,6 +19,11 @@ target/
 # Dados parquet gerados (recrie com: uv run data/generate_data.py --generate)
 *.parquet
 
+# Saída de ETL/demos em data/rich (100% gerada; ex.: JSON do DuckDB/19),
+# mantendo só o .gitkeep que preserva o diretório
+data/rich/*
+!data/rich/.gitkeep
+
 # Documentação HTML gerada automaticamente (recrie com pdoc; ver rust-extension/README.md)
 rust-extension/docs/
 

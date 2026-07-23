@@ -82,7 +82,11 @@ if __name__ == "__main__":
         FROM customers WHERE len(tags) > 0 LIMIT 4
         """
     ).show()
-    # UNNEST explode a lista em linhas; para agregar por cima, entra em subquery
+    # UNNEST é o inverso de uma agregação de lista: pega UMA linha cuja coluna é
+    # uma lista de N itens e a "explode" em N linhas (uma por item) — o cliente com
+    # tags ['vip','online'] vira duas linhas. Depois de explodido, agrega-se por
+    # cima como colunas normais; por isso o UNNEST fica numa subquery e o GROUP BY
+    # do lado de fora conta as ocorrências de cada tag.
     con.sql(
         """
         SELECT tag, COUNT(*) AS clientes
