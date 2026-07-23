@@ -173,6 +173,17 @@ caching, 30-min timeout, publishes generated HTML docs as an artifact).
   with `git push -u origin claude/<name>`. The maintainer reviews, merges, and
   deletes the branch; the assistant then syncs local `main`
   (`git checkout main && git pull origin main && git branch -D claude/<name>`).
+- **Never delete a remote branch.** No `git push origin --delete <branch>` and no
+  `git push origin :<branch>`, not even for a `claude/**` branch whose PR is
+  already merged. Deleting branches on the remote is always the maintainer's job.
+  If remote cleanup seems warranted, point it out and let the maintainer do it.
+- **Never alter a local branch that is not prefixed `claude/`.** Do not commit to,
+  amend, rebase, reset, cherry-pick onto, or otherwise change the working state of
+  `main` (or any non-`claude/` branch). The **only** permitted touch of `main` is
+  the fast-forward sync from `origin/main` after a merge
+  (`git checkout main && git pull origin main`), which introduces no local changes.
+  All actual work happens on `claude/**` branches; deleting a local `claude/**`
+  branch after its merge is fine.
 - Commit and/or push **only when explicitly asked**. Write clear
   pt-BR-friendly commit messages.
 - Do **not** open a pull request unless explicitly asked. When asked, use the
