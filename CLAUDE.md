@@ -175,7 +175,11 @@ caching, 30-min timeout, publishes generated HTML docs as an artifact).
   (`git checkout main && git pull origin main && git branch -D claude/<name>`).
 - Commit and/or push **only when explicitly asked**. Write clear
   pt-BR-friendly commit messages.
-- Do **not** open a pull request unless explicitly asked (and note the assistant
-  cannot open one from the local environment anyway — no `gh`/token there).
+- Do **not** open a pull request unless explicitly asked. When asked, use the
+  GitHub CLI (`gh`), which is installed and authenticated in this environment
+  (SSH protocol, scope `repo`). The flow is: create a `claude/<name>` branch,
+  commit and push it (`git push -u origin claude/<name>`), then open the PR
+  against `main` with `gh pr create --base main --title ... --body ...`. Write
+  the title and body in pt-BR-friendly wording. Never open a PR from `main`.
 - Remote is `origin` (SSH). Pushing `main` is just `git push`; there is no push
   wrapper script.
