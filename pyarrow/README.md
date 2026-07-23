@@ -27,6 +27,7 @@ uv sync
 | `10_data_types.py` | todos os tipos da stack: decimal(12,2) exato, list/struct/map (kernels), binary, construção manual e roundtrip parquet |
 | `11_sequential_stateful_loop.py` | lógica sequencial com estado, em lotes (streaming), no lado Python — o análogo do `compute_customer_running_spend` do Rust, exercitando a API mesmo sem performar (via `Table.to_batches` + estado; contraste com `group_by/sum`) |
 | `12_predicate_pushdown_and_bloom.py` | predicate pushdown por `min`/`max` de row group (ordenado vs embaralhado, medido) e bloom filters (`bloom_filter_options` na escrita, provado pelos metadados) |
+| `13_ipc_feather_vs_parquet.py` | Arrow IPC (Feather V2) vs Parquet: tamanho em disco, velocidade de carga e zero-copy via `memory_map` (provado por `total_allocated_bytes`), a nuance da compressão que anula o zero-copy, e arquivo (`pa.ipc.new_file`) vs stream (`new_stream`) |
 
 ```bash
 uv run examples/01_reading_partitioned_datasets.py

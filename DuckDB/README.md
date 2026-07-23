@@ -58,6 +58,11 @@ uv sync
 | `15_sequential_stateful_loop.py` | lógica sequencial com estado, em lotes (streaming), no lado Python — o análogo do `compute_customer_running_spend` do Rust, exercitando a API mesmo sem performar (via `to_arrow_reader` + estado; contraste com `SUM` agrupado) |
 | `16_join_performance.py` | JOIN sem agregação: por que índice ART NÃO acelera join (é hash join), e o que acelera de fato — pushdown do filtro até o fato + zonemaps do fato ordenado (medido) |
 | `17_multitable_join_spill.py` | JOIN de 5 tabelas (estrela + ponte N:N ponderada por `fator`) sob `memory_limit='100MB'`: `SUM(valor_fluxo * fator)` por área com spill para disco medido; `SET threads=2` para caber no teto |
+| `18_explain_analyze_profiling.py` | profiling como ferramenta: `EXPLAIN` (plano estimado) vs `EXPLAIN ANALYZE`, `PRAGMA enable_profiling='json'`, operador dominante, cardinalidade real vs estimada, `Dynamic Filters` no scan |
+| `19_json_ingestion_and_extraction.py` | JSON opaco de texto (`->`, `->>`, `json_extract`, caminhos `$.a.b`/`[*]`, `json_keys`) vs `read_json_auto` que sniffa o schema (objeto→STRUCT); contraste com os tipos nativos STRUCT/LIST/MAP do parquet |
+| `20_window_functions_advanced.py` | `LAG`/`LEAD` (navegação), `NTILE` (quartis), frames `ROWS` vs `RANGE` (empates/peers), `FIRST_VALUE`/`LAST_VALUE` e a pegadinha do frame padrão |
+| `21_transactions_and_mvcc.py` | `BEGIN`/`COMMIT`/`ROLLBACK`, atomicidade sob erro (transação abortada), MVCC/isolamento por snapshot entre conexões, concorrência otimista (conflito na mesma linha) |
+| `22_parameterized_queries.py` | placeholders `?`/`$1`/`$nome`, injeção de SQL medida (0 vs 2000 linhas), tipos serializados pelo driver, `PREPARE`/`EXECUTE`, `executemany`, e a ressalva "parâmetro é valor, não identificador" |
 
 ## Performance sem índices (exemplo 12)
 
