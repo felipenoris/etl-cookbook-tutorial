@@ -1,5 +1,35 @@
 """Exemplo 20 — Window functions além do básico: navegação, quartis e frames.
 
+## Anatomia de uma window function (para quem parte do zero)
+
+Uma *window function* (função de janela) tem sempre a forma
+`FUNCAO(...) OVER (PARTITION BY ... ORDER BY ... <frame>)`. Diferente do
+`GROUP BY` — que colapsa cada grupo numa única linha — a window **mantém todas
+as linhas** e anexa a cada uma um valor calculado olhando um conjunto de linhas
+"vizinhas" (a *janela*). Lendo a cláusula `OVER (...)` da esquerda para a
+direita:
+
+- **`OVER (...)`** é o que transforma uma função comum em função de janela. Sem
+  `OVER`, `SUM(x)` agrega tudo; com `OVER`, `SUM(x) OVER (...)` calcula uma soma
+  por linha, sobre a janela daquela linha.
+- **`PARTITION BY coluna`** divide as linhas em janelas independentes (uma por
+  valor de `coluna`) — como um `GROUP BY` que **não** colapsa. Omitir o
+  `PARTITION BY` faz a janela ser a tabela inteira.
+- **`ORDER BY coluna`** ordena as linhas **dentro** de cada janela (não confunda
+  com o `ORDER BY` final da query, que ordena a saída). É o que dá sentido a
+  "anterior/seguinte" (`LAG`/`LEAD`), a "posição" (`ROW_NUMBER`) e ao acumulado.
+- **`<frame>`** (`ROWS`/`RANGE BETWEEN ... AND ...`) delimita, dentro da janela
+  já ordenada, **quais linhas** entram no cálculo daquela linha (as N anteriores,
+  até a atual, a janela toda...). Só se aplica a agregados/`FIRST_VALUE`/
+  `LAST_VALUE`; funções de ranking como `ROW_NUMBER` ignoram o frame.
+
+Exemplo mínimo: `ROW_NUMBER() OVER (PARTITION BY categoria ORDER BY receita DESC)`
+numera 1, 2, 3... os produtos de cada categoria, do maior faturamento ao menor,
+reiniciando a cada categoria. (Ver também o exemplo 03, que introduz
+`ROW_NUMBER`, `QUALIFY` e a média móvel.)
+
+## O que este exemplo aprofunda
+
 O exemplo 03 apresentou o essencial de window functions: `ROW_NUMBER`,
 `QUALIFY` e uma média móvel simples com `ROWS BETWEEN 2 PRECEDING AND CURRENT
 ROW`. Este exemplo aprofunda os quatro recursos que aparecem em quase todo
@@ -33,7 +63,10 @@ from _common import ORDERS_GLOB, PRODUCTS_GLOB, section
 
 if __name__ == "__main__":
     con = duckdb.connect()
-    # receita por produto e por categoria: a base dos exemplos de navegação e quartil
+    # receita por produto e por categoria: a base dos exemplos de navegação e quartil.
+    # `expr::DECIMAL(18, 2)` é o CAST no estilo do DuckDB/Postgres: idêntico a
+    # CAST(expr AS DECIMAL(18, 2)), só mais curto. Aqui fixa a soma como decimal de
+    # 18 dígitos e 2 casas (dinheiro exato; a receita agregada não cabe em (12,2)).
     con.execute(
         f"""
         CREATE VIEW receita_produto AS

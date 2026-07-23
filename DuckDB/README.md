@@ -63,6 +63,79 @@ uv sync
 | `20_window_functions_advanced.py` | `LAG`/`LEAD` (navegação), `NTILE` (quartis), frames `ROWS` vs `RANGE` (empates/peers), `FIRST_VALUE`/`LAST_VALUE` e a pegadinha do frame padrão |
 | `21_transactions_and_mvcc.py` | `BEGIN`/`COMMIT`/`ROLLBACK`, atomicidade sob erro (transação abortada), MVCC/isolamento por snapshot entre conexões, concorrência otimista (conflito na mesma linha) |
 | `22_parameterized_queries.py` | placeholders `?`/`$1`/`$nome`, injeção de SQL medida (0 vs 2000 linhas), tipos serializados pelo driver, `PREPARE`/`EXECUTE`, `executemany`, e a ressalva "parâmetro é valor, não identificador" |
+| `23_surrogate_keys_returning.py` | chaves primárias sequenciais (surrogate keys): `CREATE SEQUENCE` + `DEFAULT nextval` (não há `IDENTITY`), `RETURNING` para resgatar as chaves geradas em lote, tradução natural→surrogate no fato, carga incremental por anti-join |
+
+## Glossário: comandos além do SQL transacional básico
+
+Vários exemplos usam construções que quem vem de SQL de aplicação (CRUD em
+Postgres/MySQL) raramente encontrou. Algumas são **SQL padrão, mas avançadas**
+(as *window functions*, `UNNEST`, `CREATE VIEW`); outras são **atalhos ou
+extensões do DuckDB** (`QUALIFY`, o cast `::tipo`, `RETURNING`, sequências).
+Abaixo, cada uma em uma frase, com o exemplo onde ela aparece medida na prática.
+
+### Casts e views
+
+- **`expr::DECIMAL(18, 2)`** — o operador `::` é um **atalho para `CAST(expr AS
+  DECIMAL(18, 2))`** (herdado do Postgres). Converte o tipo de `expr`; aqui fixa
+  uma soma como decimal exato de 18 dígitos e 2 casas. Padrão/DuckDB.
+  *(exemplos 17, 20, 22)*
+- **`CREATE VIEW nome AS SELECT ...`** — registra um **nome reutilizável para uma
+  query** (um "atalho salvo"). As consultas seguintes usam `FROM nome` como se
+  fosse tabela, mas nada é materializado: a view reexecuta o `SELECT` a cada uso
+  (contraste com tabela materializada no exemplo 11). SQL padrão.
+  *(exemplos 01, 03, 14, 20, 22, 23)*
+- **`UNNEST(lista)`** — o **inverso de agregar numa lista**: transforma uma linha
+  cuja coluna é uma lista de N itens em N linhas (uma por item). Usado para
+  "explodir" `LIST`/arrays (inclusive de JSON) e então agregar por cima. SQL
+  padrão. *(exemplos 09, 14, 19)*
+
+### Window functions (funções de janela)
+
+Todas têm a forma `FUNCAO(...) OVER (PARTITION BY ... ORDER BY ... <frame>)` e,
+ao contrário do `GROUP BY`, **preservam as linhas**, anexando um valor calculado
+sobre as "vizinhas". São SQL padrão (exceto `QUALIFY`). A anatomia completa está
+no cabeçalho do exemplo 20.
+
+- **`OVER (...)`** — o que torna uma função uma *window function*. `SUM(x)`
+  agrega tudo; `SUM(x) OVER (...)` calcula um valor por linha.
+- **`OVER (PARTITION BY coluna)`** — divide as linhas em **janelas independentes**
+  (uma por valor da coluna), como um `GROUP BY` que não colapsa. Sem
+  `PARTITION BY`, a janela é a tabela inteira.
+- **`OVER (ORDER BY coluna)`** — ordena as linhas **dentro** da janela (≠ do
+  `ORDER BY` final da query). É o que dá sentido a "anterior/seguinte", posição e
+  acumulado.
+- **`OVER (ORDER BY ... ROWS BETWEEN ...)`** — *frame* por **linhas físicas**:
+  para cada linha, agrega as N anteriores até a atual (ex.: média móvel de 3 dias
+  com `ROWS BETWEEN 2 PRECEDING AND CURRENT ROW`). *(exemplos 03, 20)*
+- **`OVER (ORDER BY ... RANGE BETWEEN ...)`** — *frame* por **valor**: inclui
+  todos os *peers* (linhas com o mesmo valor de `ORDER BY`). Só difere de `ROWS`
+  quando há **empates** — e é o **default** quando o frame é omitido. *(exemplo 20)*
+- **`ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...)`** — numera 1, 2, 3... as
+  linhas de cada janela na ordem dada, reiniciando a cada partição. Base do
+  "top-N por grupo". *(exemplos 03, 20)*
+- **`LAG(coluna)` / `LEAD(coluna)`** — leem a linha **anterior** / **seguinte**
+  dentro da janela, sem *self-join*. Servem para variação período-a-período e
+  distância ao vizinho num ranking (`NULL` nas bordas). *(exemplo 20)*
+- **`NTILE(n)`** — reparte as linhas ordenadas em **n baldes de tamanho quase
+  igual** — quartis (`NTILE(4)`), decis (`NTILE(10)`), etc. *(exemplo 20)*
+- **`FIRST_VALUE` / `LAST_VALUE`** — o **primeiro/último** valor da janela. Cuidado
+  com o `LAST_VALUE`: o frame padrão para na linha atual, então é preciso abrir o
+  frame até `UNBOUNDED FOLLOWING` para pegar o último de fato. *(exemplo 20)*
+- **`QUALIFY cond`** — o **"`WHERE` das window functions"**: filtra pelo resultado
+  de uma função de janela sem exigir uma subquery (o `WHERE` normal roda antes das
+  janelas). **Extensão** do DuckDB/Snowflake/BigQuery; não existe em Postgres/MySQL.
+  *(exemplos 03, 20)*
+
+### Chaves geradas pelo banco (exemplo 23)
+
+- **`CREATE SEQUENCE seq` + `coluna BIGINT DEFAULT nextval('seq')`** — como o
+  DuckDB **não tem `AUTO_INCREMENT`/`IDENTITY`**, essa dupla é o idioma para uma
+  chave primária que o banco preenche em sequência (o `SERIAL` do Postgres feito à
+  mão). *(exemplo 23)*
+- **`INSERT ... RETURNING col, ...`** — faz o `INSERT` (ou `UPDATE`/`DELETE`)
+  **devolver as linhas afetadas** já com as colunas preenchidas pelo banco — o
+  jeito de resgatar as surrogate keys geradas por um lote inteiro numa só ida ao
+  banco. *(exemplo 23)*
 
 ## Performance sem índices (exemplo 12)
 
@@ -128,6 +201,83 @@ então produto e soma ficam exatos, nunca `float`.
 ```bash
 uv run examples/17_multitable_join_spill.py
 ```
+
+## Transações, MVCC e concorrência (exemplo 21)
+
+Como o DuckDB é *embutido* (roda dentro do processo, sem servidor separado — ver
+"Conceitos centrais"), o processo que abre a conexão manipula o arquivo `.duckdb`
+diretamente, sem um processo central mediando os acessos. Isso levanta uma dúvida
+natural para quem vem de um SGBD cliente-servidor (Postgres, MySQL): como ficam as
+transações? A resposta tem **dois níveis** bem distintos.
+
+### Dentro de um processo: transações completas (MVCC)
+
+No mesmo processo, o DuckDB oferece transações **ACID** de verdade, com
+`BEGIN`/`COMMIT`/`ROLLBACK`:
+
+- **Atomicidade**: um erro no meio da transação a aborta por inteiro; nada é
+  gravado pela metade (`ROLLBACK` implícito).
+- **MVCC** (*multi-version concurrency control*) com **isolamento por snapshot**:
+  cada transação enxerga um instantâneo consistente do banco no momento em que
+  começou; leitores não bloqueiam escritores e vice-versa.
+- **Concorrência otimista**: várias conexões e várias threads do mesmo processo
+  podem escrever ao mesmo tempo. O DuckDB não trava linhas antecipadamente — ele
+  detecta conflito **no commit**. Se duas transações alteram o mesmo dado, uma
+  commita e a outra recebe um erro de conflito (`TransactionContext Error`) e
+  precisa refazer.
+- **Durabilidade via WAL** (*write-ahead log*): as mudanças vão primeiro para um
+  arquivo `.wal`, consolidado no arquivo principal em um `CHECKPOINT`.
+
+Ou seja: **todo o controle transacional seguro é coordenado pela instância viva do
+banco dentro de um processo.** Múltiplas conexões desse mesmo processo compartilham
+o mesmo gerenciador MVCC e se coordenam com segurança total — é isso que o exemplo
+21 exercita.
+
+### Entre processos independentes: lock de arquivo, não coordenação
+
+O que o DuckDB **não** faz é coordenar transações entre processos distintos que
+abrem o mesmo arquivo. Sem um servidor para arbitrar, ele recorre a um **lock de
+arquivo**, e o modelo é:
+
+> **ou um único processo leitor-escritor, ou vários processos somente-leitura —
+> nunca os dois ao mesmo tempo.**
+
+- Abrir em **read-write** (o padrão) pega um **lock exclusivo**: enquanto esse
+  processo segura o arquivo, nenhum outro consegue abri-lo, nem para ler.
+- Vários processos podem abrir o **mesmo** arquivo em `access_mode = 'READ_ONLY'`
+  simultaneamente, desde que **nenhum** o tenha em read-write.
+
+Não há, portanto, escrita concorrente entre processos nem coordenação transacional
+que atravesse a fronteira do processo. O lock é a única proteção, e ele exclui o
+arquivo inteiro.
+
+### Comparação com o SQLite
+
+O SQLite é o parente próximo (também embutido, também um arquivo por banco), mas o
+trade-off de concorrência é quase **invertido**:
+
+| | SQLite (modo WAL) | DuckDB |
+| --- | --- | --- |
+| Escrita entre processos | 1 escritor **+** leitores concorrentes | escritor é **exclusivo** (trava o arquivo todo) |
+| Leitura entre processos | concorrente | concorrente **só se não houver escritor** |
+| Concorrência dentro do processo | serializada, granularidade grossa | **MVCC rico, multi-thread, vetorizado** |
+
+O SQLite em modo WAL é **mais** permissivo *entre* processos (permite ler enquanto
+alguém escreve). O DuckDB abre mão disso para ser muito mais forte *dentro* do
+processo, o que combina com o caso de uso dele — cargas analíticas (OLAP),
+multi-thread, um processo grande fazendo ETL — em vez de muitas conexões
+transacionais concorrentes (OLTP), o terreno do SQLite/Postgres.
+
+### Consequências práticas
+
+- Precisa de **vários processos escrevendo** no mesmo banco? Esse não é o caso de
+  uso do DuckDB embutido. Prefira **um único processo escritor** (serializando as
+  escritas por uma fila/serviço) com *fan-out* de leitores em `READ_ONLY`.
+- Precisa do modelo **cliente-servidor** clássico (um processo central mediando
+  conexões)? Use o **MotherDuck** (serviço gerenciado sobre DuckDB) ou embrulhe o
+  DuckDB em um servidor próprio.
+- `ATTACH` de vários arquivos numa conexão **não** contorna o lock: cada arquivo
+  aberto em read-write continua exclusivo.
 
 ## Testes
 
