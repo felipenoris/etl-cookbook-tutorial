@@ -37,7 +37,7 @@ fi
 step 2/9 "pandas: suíte pytest (os smoke tests executam os 10 exemplos)"
 (cd pandas && uv run pytest)
 
-step 3/9 "pyarrow: suíte pytest (11 exemplos)"
+step 3/9 "pyarrow: suíte pytest (12 exemplos)"
 (cd pyarrow && uv run pytest)
 
 step 4/9 "DuckDB: suíte pytest (17 exemplos)"
