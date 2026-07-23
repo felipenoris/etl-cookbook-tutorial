@@ -57,6 +57,7 @@ uv sync
 | `14_data_types.py` | BOOLEAN/TIMESTAMP/DECIMAL(12,2)/STRUCT/LIST/MAP/BLOB: notação de ponto, `[1]`, `map['chave']`, `typeof`, roundtrip COPY |
 | `15_sequential_stateful_loop.py` | lógica sequencial com estado, em lotes (streaming), no lado Python — o análogo do `compute_customer_running_spend` do Rust, exercitando a API mesmo sem performar (via `to_arrow_reader` + estado; contraste com `SUM` agrupado) |
 | `16_join_performance.py` | JOIN sem agregação: por que índice ART NÃO acelera join (é hash join), e o que acelera de fato — pushdown do filtro até o fato + zonemaps do fato ordenado (medido) |
+| `17_multitable_join_spill.py` | JOIN de 5 tabelas (estrela + ponte N:N ponderada por `fator`) sob `memory_limit='100MB'`: `SUM(valor_fluxo * fator)` por área com spill para disco medido; `SET threads=2` para caber no teto |
 
 ## Performance sem índices (exemplo 12)
 
@@ -92,8 +93,35 @@ rápidos sem os índices que eu criaria no Postgres?"*. Medições no exemplo 16
   o fato precisa estar **ordenado na escrita** pela coluna filtrada para o
   scan pular row groups (o mecanismo do exemplo 12).
 
+## JOIN de muitas tabelas com RAM limitada (exemplo 17)
+
+Junta os exemplos 16 (hash join sem índice) e 04 (spill) num cenário realista:
+cinco tabelas — uma dimensão pequena (`area`), dois fatos volumosos
+(`operacao`, `contrato`), os `fluxo` de cada contrato e uma **ponte N:N**
+(`rel_operacao_contrato`) ponderada pela coluna `fator`. A pergunta de negócio
+soma `valor_fluxo` dos fluxos com `data_fluxo > 2026-01-01`, só de contratos com
+`saldo_em_aberto > 0`, **agrupado por área** — e como a relação
+operação↔contrato é N:N, o valor de cada fluxo é **rateado** pela área na
+proporção do `fator`, isto é, `SUM(valor_fluxo * fator)`. Como no resto do
+tutorial, dinheiro é `DECIMAL` de ponta a ponta (o `fator` é `DECIMAL(5,4)`),
+então produto e soma ficam exatos, nunca `float`.
+
+- **quatro hash joins encadeados, sem índice**: o plano é `HASH_JOIN` em todos
+  os cruzamentos, inclusive na ponte N:N que multiplica linhas;
+- **`memory_limit='100MB'` força spill**: os ~160MB de parquet de origem já não
+  cabem no teto, e o join intermediário muito menos — o DuckDB derrama as hash
+  tables para `temp_directory` e ainda assim conclui. O exemplo **mede o pico**
+  de bytes derramados (amostrando o diretório durante a query, pois o DuckDB
+  apaga os arquivos ao terminar) para provar que o spill aconteceu (~200MB), e
+  contrasta com `memory_limit='8GB'`, onde nada vai para disco;
+- **`SET threads=2`**: sob um teto apertado, cada thread mantém partições de
+  hash próprias; menos threads = menos memória concorrente, o que faz a query
+  caber nos 100MB de forma reprodutível em qualquer máquina (o próprio erro de
+  OOM do DuckDB sugere reduzir threads). É sobre caber no orçamento, não sobre
+  velocidade.
+
 ```bash
-uv run examples/01_connecting_and_querying.py
+uv run examples/17_multitable_join_spill.py
 ```
 
 ## Testes
