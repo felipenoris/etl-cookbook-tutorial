@@ -26,10 +26,53 @@ uv sync
 | `09_hybrid_pandas_etl.py` | padrão híbrido: `to_batches` (streaming), lógica de negócio em pandas puro, `ParquetWriter` incremental, `delete_matching` (recarga idempotente) |
 | `10_data_types.py` | todos os tipos da stack: decimal(12,2) exato, list/struct/map (kernels), binary, construção manual e roundtrip parquet |
 | `11_sequential_stateful_loop.py` | lógica sequencial com estado, em lotes (streaming), no lado Python — o análogo do `compute_customer_running_spend` do Rust, exercitando a API mesmo sem performar (via `Table.to_batches` + estado; contraste com `group_by/sum`) |
+| `12_predicate_pushdown_and_bloom.py` | predicate pushdown por `min`/`max` de row group (ordenado vs embaralhado, medido) e bloom filters (`bloom_filter_options` na escrita, provado pelos metadados) |
 
 ```bash
 uv run examples/01_reading_partitioned_datasets.py
 ```
+
+## As três formas de ler menos do Parquet
+
+Ler um parquet rápido é, antes de tudo, **não ler o que não interessa**. São
+três mecanismos independentes, que agem em níveis diferentes e se somam — cada
+um corresponde a um exemplo deste projeto:
+
+| Técnica | Elimina o quê | Usa o quê | Exemplo |
+| --- | --- | --- | --- |
+| **Partition pruning** | pastas/arquivos inteiros | o caminho Hive `coluna=valor/` | `01_reading_partitioned_datasets.py` |
+| **Predicate pushdown** | *row groups*/páginas dentro do arquivo | estatísticas `min`/`max` (e bloom filter) | `12_predicate_pushdown_and_bloom.py` |
+| **Projection pushdown** | colunas que você não pediu | o layout colunar (lê só os *column chunks* do `select`) | `02_selection_and_projection.py` |
+
+Num scan de `orders` com `filter=(pc.field("order_month") == 1) & (pc.field("amount") > 1000)`
+e `columns=["order_id", "amount"]`: o *pruning* descarta as pastas dos outros
+meses, o *predicate pushdown* pula os row groups de janeiro cujo `max(amount) <= 1000`,
+e a *projeção* lê só as duas colunas pedidas.
+
+Dois detalhes que o exemplo 12 mede sobre os dados reais:
+
+- **Ordenar não é requisito do predicate pushdown, mas é o que o torna eficaz.**
+  Todo row group carrega `min`/`max` de cada coluna; o filtro pula um bloco
+  quando prova que nenhuma linha dele passa. Com os dados ordenados pela coluna
+  do filtro, as faixas `[min, max]` ficam estreitas e sem sobreposição e quase
+  todos os blocos são descartados; embaralhados, cada faixa é larga e nada é
+  pulado (o exemplo mede 9/10 vs 0/10 row groups puláveis).
+- **Bloom filter é a exceção que cobre a igualdade em alta cardinalidade** — o
+  caso em que `min`/`max` não ajuda (todo intervalo contém o valor buscado). Ele
+  **precisa ser ligado na escrita** (`bloom_filter_options` do `write_table`) e
+  fica gravado dentro do arquivo, a um custo em disco que o exemplo quantifica.
+  Aqui os dois writers da stack divergem: no **pyarrow** o bloom é *opt-in* por
+  coluna, enquanto o **DuckDB** (`COPY … FORMAT parquet`) o grava
+  automaticamente, mas só quando os distintos por row group são ≤ 20% das linhas
+  — logo, pula colunas quase-únicas (medições na Parte B do exemplo 12).
+- **As estatísticas `min`/`max`/`null_count` vêm ligadas por padrão**
+  (`write_statistics=True`), então o predicate pushdown funciona "de graça" na
+  maioria dos parquets — só se perde se alguém escrever com
+  `write_statistics=False` (o bloco some inteiro, `null_count` incluído). Numa
+  coluna toda nula, `min`/`max` ficam ausentes, mas o `null_count` permanece.
+
+Isso vale para toda a stack Arrow: o **DuckDB** aplica os mesmos três mecanismos
+sobre os mesmos parquets (veja `../DuckDB`, exemplos 02 e 12).
 
 ## Estratégia para equipes proficientes em pandas
 
