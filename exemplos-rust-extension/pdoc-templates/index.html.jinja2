@@ -122,6 +122,155 @@ o "sort global" vira "sort local por partição", paralelizável de novo.
 
 Navegue pela busca acima ou pela lista de módulos à esquerda.
 
+## Compatibilidade de tipos entre as tecnologias
+
+Como cada tipo de dado viaja pela stack — do SQL do DuckDB, passando pela
+representação em memória (Arrow) e em disco (Parquet), até os objetos Python
+e os arrays do Rust (`arrow-rs`, usados na extensão via `pyo3-arrow`):
+
+| Tipo | DuckDB | Arrow | Parquet | Python (`ArrowDtype`/escalar) | Rust (arrow-rs) |
+| --- | --- | --- | --- | --- | --- |
+| String | `VARCHAR` | `utf8` | `BYTE_ARRAY` (String) | `string[pyarrow]` / `str` | `StringArray` (`&str`) |
+| Inteiro | `BIGINT`/`INTEGER` | `int64`/`int32` | `INT64`/`INT32` | `int64[pyarrow]` / `int` | `Int64Array` (`i64`) |
+| Float64 | `DOUBLE` | `float64` | `DOUBLE` | `double[pyarrow]` / `float` | `Float64Array` (`f64`) |
+| Booleano | `BOOLEAN` | `bool` | `BOOLEAN` | `bool[pyarrow]` / `bool` | `BooleanArray` (`bool`) |
+| Date | `DATE` | `date32[day]` | `INT32` (Date) | `date32[pyarrow]` / `datetime.date` | `Date32Array` (`i32` dias) |
+| Timestamp | `TIMESTAMP` | `timestamp[us]` | `INT64` (Timestamp µs) | `timestamp[us][pyarrow]` / `datetime` | `TimestampMicrosecondArray` (`i64` µs) |
+| Decimal | `DECIMAL(12,2)` | `decimal128(12,2)` | `FIXED_LEN_BYTE_ARRAY` (Decimal) | `decimal128(12,2)[pyarrow]` / `decimal.Decimal` | `Decimal128Array` (`i128` escalado) |
+| List | `VARCHAR[]` | `list<utf8>` | `LIST` (3 níveis) | `list<string>[pyarrow]` / `list` | `ListArray` (offsets + valores) |
+| Struct | `STRUCT(...)` | `struct<...>` | grupo aninhado | `struct<...>[pyarrow]` / `dict` | `StructArray` (arrays-filha) |
+| Map | `MAP(VARCHAR,VARCHAR)` | `map<utf8,utf8>` | `MAP` (key_value) | `map<...>[pyarrow]` / lista de pares | `MapArray` (keys/values + offsets) |
+| Binary | `BLOB` | `binary` | `BYTE_ARRAY` | `binary[pyarrow]` / `bytes` | `BinaryArray` (`&[u8]`) |
+
+Observações que os exemplos demonstram na prática:
+
+- **Decimal**: o projeto padroniza **2 casas decimais** (`decimal128(12,2)`).
+  Somas e multiplicações preservam o tipo exato em todas as camadas (a escala
+  2 se mantém; a precisão cresce). No Python, o tipo escalar é sempre o
+  `decimal.Decimal` da stdlib; no Rust, as colunas Arrow (`i128` + escala)
+  são convertidas para [`rust_decimal::Decimal`](https://docs.rs/rust_decimal)
+  para a aritmética, e escalares atravessam a fronteira Python↔Rust como
+  `decimal.Decimal` ↔ `rust_decimal::Decimal` (feature `rust_decimal` do
+  pyo3). Cuidado com o que degrada para float: `AVG` no DuckDB e a mistura
+  float×decimal (promova o float para decimal antes).
+- **Date/Timestamp**: no Python, o tipo escalar é o `datetime.date` /
+  `datetime.datetime` da stdlib (é o que `.as_py()` e o `fetchone()` do
+  DuckDB devolvem, e o que `pa.array(...)` aceita na construção). No Rust,
+  escalares atravessam a fronteira como `datetime.date` ↔
+  [`chrono::NaiveDate`](https://docs.rs/chrono) (feature `chrono` do pyo3), e
+  as colunas date32 (i32 de dias) são convertidas para `NaiveDate` para
+  aritmética de calendário.
+- **Aninhados (list/struct/map)**: DuckDB acessa com `tags[1]`,
+  `address.city` e `preferences['chave']`; pandas tem os acessores `.list` e
+  `.struct` (map exige a escotilha pyarrow); o motor de join do pyarrow
+  (Acero) **não aceita colunas aninhadas como payload** — projete/achate
+  antes do join. No Rust, a escrita usa os builders do arrow-rs
+  (`ListBuilder`, `MapBuilder`, `StructArray`) — ver `roundtrip_all_types`
+  em `etl_rust_ext`, que exercita leitura e escrita dos 11 tipos.
+- Onde ver cada camada: [`exemplos-pyarrow/examples/10`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-pyarrow/examples/10_data_types.py),
+  [`exemplos-pandas/examples/09`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-pandas/examples/09_arrow_data_types.py),
+  [`exemplos-DuckDB/examples/14`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-DuckDB/examples/14_data_types.py) e
+  [`exemplos-rust-extension/run_data_types.py`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-rust-extension/run_data_types.py).
+
+## Performance: comparando as abordagens
+
+Os exemplos deste tutorial medem, com o mesmo cálculo em cada caso, as
+abordagens possíveis para implementar um ETL. O resultado consolidado está
+abaixo. **Todos os números foram medidos** nas máquinas/dados deste
+repositório — não são estimativas de catálogo.
+
+### A conclusão em uma frase
+
+O fator dominante **não é a linguagem**, e sim a **granularidade com que se
+atravessa fronteiras e se materializam objetos**. Trocar Python por Rust dá
+um fator; trocar processamento linha a linha por processamento em lote dá
+ordens de grandeza.
+
+### Tabela comparativa
+
+Três siglas aparecem abaixo:
+
+- **UDF** (*User-Defined Function*) — função escrita por você e registrada no
+  motor SQL para ser chamada de dentro de uma consulta; no DuckDB, pode ser em
+  Python, injetando lógica que o SQL não expressa nativamente (ver
+  [`exemplos-DuckDB/10`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-DuckDB/examples/10_macros_and_python_udfs.py)).
+- **N+1** — a armadilha do ORM em que carregar N registros relacionados dispara
+  uma query inicial *mais uma query por registro* (1 + N idas ao banco), em vez
+  de trazer tudo de uma vez (ver [`exemplos-sqlalchemy-contract/04`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-sqlalchemy-contract/examples/04_orm_vs_batch.py)).
+- **GIL** (*Global Interpreter Lock*) — o mecanismo do CPython que permite só
+  uma thread executar bytecode Python por vez; código Rust nativo pode
+  liberá-lo e assim rodar em paralelo de verdade (ver [`exemplos-rust-extension`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-rust-extension/README.md)).
+
+| Abordagem | Vazão medida | Exemplo | Vantagens | Desvantagens |
+| --- | --- | --- | --- | --- |
+| **ORM com lazy loading** (N+1) | **~20k linhas/s** | [`exemplos-sqlalchemy-contract/04`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-sqlalchemy-contract/examples/04_orm_vs_batch.py) | a mais produtiva de escrever; navegação natural | N+1 silencioso; paga os 5 custos do ORM |
+| **ORM com eager loading** | **~80k linhas/s** | [`exemplos-sqlalchemy-contract/04`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-sqlalchemy-contract/examples/04_orm_vs_batch.py) | elimina o N+1 mantendo a ergonomia | 1 objeto Python por linha (GC, refcount) |
+| **INSERT via ORM** (escrita) | **~50k linhas/s** | [`exemplos-sqlalchemy-contract/02`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-sqlalchemy-contract/examples/02_orm_vs_columnar.py) | unit of work cuida de tudo | inviável para carga massiva |
+| **SQLAlchemy Core** (executemany) | **~320k linhas/s** | [`exemplos-sqlalchemy-contract/02`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-sqlalchemy-contract/examples/02_orm_vs_columnar.py) | sem objetos ORM; ainda é SQL portável | continua orientado a linha |
+| **Linhas brutas + laço Python** | **~670k linhas/s** ¹ | [`exemplos-sqlalchemy-contract/04`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-sqlalchemy-contract/examples/04_orm_vs_batch.py) | simples; sem dependência extra | limitado pelo interpretador *e pela carga por linha* |
+| **UDF Python no DuckDB** | **~10-16M linhas/s** ¹ | [`exemplos-DuckDB/10`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-DuckDB/examples/10_macros_and_python_udfs.py) | lógica Python arbitrária dentro do SQL | **24-39x mais lento que o SQL equivalente** (medido com controle) |
+| **SQL colunar puro** (DuckDB) | **~300-650M linhas/s** | [`exemplos-DuckDB/03`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-DuckDB/examples/03_joins_and_aggregations.py), [`exemplos-DuckDB/12`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-DuckDB/examples/12_performance_without_indexes.py) | vetorizado e paralelo; sem código por linha | só o que é expressável em SQL |
+| **Escrita colunar** (Arrow→parquet) | **~4.3M linhas/s** | [`exemplos-sqlalchemy-contract/02`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-sqlalchemy-contract/examples/02_orm_vs_columnar.py) | ~87x o INSERT do ORM | destino é arquivo, não tabela transacional |
+| **Rust serial** (pyo3-arrow) | **~2.2M contratos/s** | [`exemplos-rust-extension`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-rust-extension/run_contracts_parallel.py) | cálculo com estado, impossível de vetorizar | exige toolchain Rust |
+| **Rust multithread** | **~12M contratos/s** | [`exemplos-rust-extension`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-rust-extension/run_contracts_parallel.py) | ~5,5x sobre o serial (11 CPUs), fora do GIL | complexidade de concorrência |
+| **Rust, fatias emprestadas** | **~55M contratos/s** | [`exemplos-rust-extension/run_nested_params.py`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-rust-extension/run_nested_params.py) | zero alocação/cópia sobre `ListArray` | exige pensar em lifetimes |
+| **Pipeline completo de ETL** | **~4M linhas/s** | [`exemplos-rust-extension/run_etl.py`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-rust-extension/run_etl.py) | 33,7M linhas em ~8s: join+sort+Rust+escrita | — |
+
+### Os cinco custos que explicam a tabela
+
+A [decomposição detalhada](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-sqlalchemy-contract/README.md#por-que-o-orm-é-lento-os-cinco-custos)
+está no `exemplos-sqlalchemy-contract`: (1) metadados por linha, (2) escrituração do
+ORM, (3) travessia de fronteira por linha, (4) execução interpretada e (5)
+alocação de heap por linha. Cada degrau da tabela elimina um subconjunto
+deles. O [estudo em Rust](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-rust-extension/run_nested_params.py) mostra que
+**quatro dos cinco desaparecem só por sair do Python** — por isso a mesma
+lição ("não processe linha a linha") custa ~4x lá e ~258x aqui.
+
+¹ As duas linhas marcadas são "Python percorrendo linhas" e ainda assim diferem ~24x — ver ressalva 3.
+
+### Quatro ressalvas importantes
+
+**1. Volume importa — colunar nem sempre ganha.** Com ~15 mil linhas, o
+caminho DuckDB fica *mais lento* que um laço Python: o custo fixo de conexão
+e planejamento não se paga. Não troque um laço por um motor SQL para
+processar mil registros.
+
+**2. O custo é SAIR do motor, não o estilo da UDF.** Com um controle
+isolando o scan+join, a mesma regra de desconto sobre 5,6M de linhas custa
+~0,01s em SQL puro (`CASE WHEN`), ~0,36s na UDF `native` e ~0,57s na `arrow`
+— ou seja, **qualquer UDF Python custa 24-39x o SQL equivalente**. Entre as
+duas variantes a diferença é modesta, e contrariando a intuição a `native`
+ganha (o DuckDB amortiza o overhead internamente; a `arrow` aloca arrays
+intermediários por kernel). Decida primeiro *se* precisa de UDF; só depois
+qual variante.
+
+**3. "Velocidade de um laço Python" não é um número — depende da carga.**
+Dois números desta tabela são ambos "Python percorrendo linhas", e diferem
+~24x entre si: o laço do exemplo 04 faz ~670k linhas/s porque usa aritmética
+`Decimal` e constrói listas; a UDF do exemplo 10 faz ~16M linhas/s porque
+compara e multiplica `float`. O interpretador é o mesmo — muda **o trabalho
+por linha**. Ao estimar o seu caso, olhe o que o laço faz (Decimal? strings?
+alocação?) antes de extrapolar qualquer uma dessas vazões.
+
+**4. As vazões não são comparáveis entre si diretamente.** Cada linha da
+tabela mede um *trabalho diferente* (agregar, inserir, projetar receita com
+juros compostos). Os números servem para comparar **abordagens dentro de um
+mesmo exemplo** e para dar ordem de grandeza — não para extrapolar que "SQL é
+50x mais rápido que Rust" (não é; são cargas distintas). Medições em máquina
+de 11 CPUs, dados em cache do SO.
+
+### Como escolher
+
+- **SQL colunar** para tudo que for expressável em SQL (join, agregação,
+  window function): é o mais rápido e o mais simples.
+- **UDF Python** quando a lógica não couber em SQL mas o volume for moderado.
+- **Rust** quando houver cálculo sequencial com estado por entidade (projeções
+  financeiras, simulações) sobre volume alto — e aí use
+  [pool com backpressure](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-rust-extension/README.md) para manter memória
+  constante.
+- **ORM** apenas fora do caminho de dados: schema/contrato e consultas
+  pontuais.
+
 ## Mais
 
 - [Página inicial da documentação](https://felipenoris.github.io/etl-cookbook-tutorial/) — liga a parte Python e a Rust.
