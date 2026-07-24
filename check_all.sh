@@ -30,9 +30,9 @@ step() { printf '\n\033[1m==> [%s] %s\033[0m\n' "$1" "$2"; }
 
 step 1/9 "Dados fictícios em data/raw"
 if [[ -d data/raw/orders ]]; then
-    echo "data/raw já existe — pulando (regenere com: uv run data/generate_data.py --clean --generate)"
+    echo "data/raw já existe — pulando (regenere com: uv run --script data/generate_data.py --clean --generate)"
 else
-    uv run data/generate_data.py --generate
+    uv run --script data/generate_data.py --generate
 fi
 
 step 2/9 "pandas: suíte pytest (os smoke tests executam os 10 exemplos)"

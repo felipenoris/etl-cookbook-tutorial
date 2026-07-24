@@ -80,9 +80,9 @@ Generate / clean the dataset (parquet is **not** committed — regenerate after 
 fresh clone; `check_all.sh` does this automatically):
 
 ```bash
-uv run data/generate_data.py --generate           # generate into data/raw
-uv run data/generate_data.py --clean              # remove parquet from raw/ and rich/
-uv run data/generate_data.py --clean --generate   # regenerate from scratch
+uv run --script data/generate_data.py --generate           # generate into data/raw
+uv run --script data/generate_data.py --clean              # remove parquet from raw/ and rich/
+uv run --script data/generate_data.py --clean --generate   # regenerate from scratch
 ```
 
 Remove generated artifacts (inverse of `check_all.sh`):
