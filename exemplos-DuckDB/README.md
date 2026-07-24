@@ -35,7 +35,9 @@ uv sync
   chamado *spill to disk*. Isso é o que permite processar arquivos maiores
   que a RAM disponível sem estourar memória.
 - **Threads**: `SET threads=N` controla o paralelismo interno do motor
-  vetorizado.
+  vetorizado. O default é uma thread por núcleo; sob um `memory_limit` apertado,
+  reduzir as threads é essencial para não estourar a memória (ver *Tuning de
+  workloads: memória, threads e spill* abaixo).
 
 ## Exemplos
 
@@ -44,7 +46,7 @@ uv sync
 | `01_connecting_and_querying.py` | `connect()`, `con.sql()` vs `con.execute()`, SELECT sobre glob |
 | `02_reading_partitioned_parquet.py` | `hive_partitioning=true`, partition pruning via `EXPLAIN` |
 | `03_joins_and_aggregations.py` | join de 3 tabelas, agregações, window functions (`ROW_NUMBER`, `QUALIFY`) |
-| `04_memory_limit_and_spill.py` | `memory_limit`, `temp_directory`, forçando spill num sort/aggregate grande |
+| `04_memory_limit_and_spill.py` | `memory_limit`, `temp_directory`, `SET threads` para caber no teto, forçando spill num sort/aggregate grande |
 | `05_pandas_arrow_interop.py` | `.arrow()`/`.df()`, handoff zero-copy com pyarrow e pandas (backend Arrow) |
 | `06_copy_to_partitioned.py` | `COPY TO` com `PARTITION_BY`, recarga idempotente de partição, `FILE_SIZE_BYTES` |
 | `07_persistent_staging_upsert.py` | banco persistente (`.db`), CTAS, `ATTACH` entre bancos, UPSERT (`ON CONFLICT`); paleta de DDL (constraints, `DEFAULT`, coluna gerada, `SEQUENCE`, `CREATE INDEX`, `ALTER`) e a comparação com os parâmetros estilo Hive (`PARTITIONED BY`/`LOCATION`) |
@@ -201,6 +203,66 @@ então produto e soma ficam exatos, nunca `float`.
 ```bash
 uv run examples/17_multitable_join_spill.py
 ```
+
+## Tuning de workloads: memória, threads e spill
+
+Dois padrões do DuckDB surpreendem quem chega de um SGBD cliente-servidor e são
+a causa mais comum de *"funcionava na minha máquina"*:
+
+- **memória**: o teto default é ~80% da RAM detectada — generoso, mas é o *seu*
+  processo que paga a conta.
+- **paralelismo**: o default é **uma thread por núcleo** da máquina. Ótimo para
+  velocidade, mas cada thread reserva um **piso de memória de trabalho** para
+  suas partições de hash/sort.
+
+Os dois interagem de um jeito que morde: ao **apertar o `memory_limit`** (para
+caber num container, num teste, ou de propósito para forçar spill), o piso de
+memória somado de *todas* as threads pode **estourar o teto antes de o motor
+conseguir spillar** — e então, em vez de derramar para disco, ele aborta com
+`OutOfMemoryException` (`failed to pin block of size ...`). Como o número de
+threads acompanha a contagem de núcleos, o **mesmo código passa numa máquina de
+poucos núcleos e falha numa de muitos** com o mesmíssimo `memory_limit`.
+(Medido neste repo: `memory_limit='150MB'` + o `ORDER BY` de 33.7M linhas do
+exemplo 04 spilla normalmente com ≤8 threads e estoura com ≥16.)
+
+### Os botões (todos via `SET`, valem por conexão)
+
+| Comando | O que faz |
+| --- | --- |
+| `SET memory_limit='512MB'` | teto de memória do motor — um orçamento **global**, dividido entre as threads. |
+| `SET threads=4` | número de threads de execução. **Menos threads = menos memória concorrente**; é o primeiro ajuste que o próprio erro de OOM sugere. |
+| `SET temp_directory='/caminho'` | onde gravar os blocos que não couberem no teto (o *spill*). **Sem ele, uma operação grande não tem para onde derramar** — só resta o OOM. |
+| `SET preserve_insertion_order=false` | dispensa a garantia de ordem dos dados de origem em resultados sem `ORDER BY`, liberando memória e paralelismo. |
+
+### A regra prática
+
+O `memory_limit` é um **orçamento compartilhado por todas as threads**. Grosso
+modo, é preciso que `piso_por_thread × threads` caiba no teto — caso contrário o
+motor fica sem espaço nem para os buffers mínimos e falha antes de spillar. Logo:
+ao **baixar o `memory_limit`, baixe também as `threads`**. Sob tetos apertados
+(centenas de MB), 2–4 threads costumam bastar para concluir com spill; sob o teto
+default (na casa dos GB), deixe o DuckDB usar todos os núcleos.
+
+### Checklist para não cair no OOM
+
+- Definiu um `memory_limit` baixo? **Fixe `SET threads` num valor pequeno (2–4)** —
+  não confie no default, que muda de máquina para máquina.
+- **Sempre** defina `temp_directory` quando a operação puder não caber: sem ele
+  não há spill, só OOM.
+- Precisa de ordem determinística? Use `ORDER BY` explícito com
+  `preserve_insertion_order=false`; nunca dependa da ordem implícita de inserção.
+- "Passou na minha máquina" não vale se ela tem contagem de núcleos diferente da
+  de produção/CI — teste com o mesmo `threads` que vai rodar em produção.
+- Sob teto apertado, **meça o spill** (o exemplo 17 amostra o `temp_directory`
+  durante a query) para confirmar que a operação está derramando para disco, e
+  não segurando tudo em RAM.
+
+Os exemplos [`04_memory_limit_and_spill.py`](examples/04_memory_limit_and_spill.py)
+e [`17_multitable_join_spill.py`](examples/17_multitable_join_spill.py) aplicam
+exatamente esse cuidado: `memory_limit` baixo **+** `SET threads` fixo **+** spill
+para `temp_directory`, de forma reprodutível em qualquer máquina.
+
+Guia oficial completo: [DuckDB — How to Tune Workloads](https://duckdb.org/docs/current/guides/performance/how_to_tune_workloads).
 
 ## Transações, MVCC e concorrência (exemplo 21)
 
