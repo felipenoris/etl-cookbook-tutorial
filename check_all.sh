@@ -3,9 +3,10 @@
 #
 # Executa, em sequência: geração dos dados fictícios (se necessário), as 5
 # suítes pytest (cujos smoke tests executam TODOS os scripts de examples/),
-# os 3 scripts standalone do rust-extension (run_etl, run_contracts_parallel,
-# run_data_types) e a geração das documentações (doctest + pdoc + cargo doc).
-# Qualquer falha interrompe o script com erro.
+# os 5 scripts standalone do rust-extension (run_etl, run_contracts_parallel,
+# run_reorg_for_upstream, run_data_types, run_nested_params) e a geração das
+# documentações (doctest + pdoc + cargo doc). Qualquer falha interrompe o script
+# com erro.
 #
 # Uso:
 #   ./check_all.sh                # verificação completa (3 testes usam internet)
@@ -37,10 +38,10 @@ fi
 step 2/9 "pandas: suíte pytest (os smoke tests executam os 10 exemplos)"
 (cd pandas && uv run pytest)
 
-step 3/9 "pyarrow: suíte pytest (12 exemplos)"
+step 3/9 "pyarrow: suíte pytest (13 exemplos)"
 (cd pyarrow && uv run pytest)
 
-step 4/9 "DuckDB: suíte pytest (17 exemplos)"
+step 4/9 "DuckDB: suíte pytest (23 exemplos)"
 (cd DuckDB && uv run pytest $DUCKDB_FLAGS)
 
 step 5/9 "rust-extension: suíte pytest (compila a extensão via maturin no 1º uso)"
