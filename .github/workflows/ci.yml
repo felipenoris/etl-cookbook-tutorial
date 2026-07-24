@@ -41,11 +41,11 @@ jobs:
       - name: Cache do build Rust
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rust-extension
+          workspaces: exemplos-rust-extension
 
       # check_all.sh faz tudo em sequência: gera os dados fictícios, roda as 5
       # suítes pytest (cujos smoke tests executam TODOS os scripts de examples/),
-      # executa os scripts standalone do rust-extension e gera as documentações
+      # executa os scripts standalone do exemplos-rust-extension e gera as documentações
       # (doctest + pdoc + cargo doc). Qualquer falha derruba o job.
       #
       # Os runners do GitHub têm internet, então rodamos a suíte COMPLETA,
