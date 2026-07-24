@@ -29,6 +29,16 @@ Comandos usados (todos via `SET`, válidos para a conexão):
     libera o motor para reordenar/spillar à vontade. (Se a ordem importa,
     a resposta certa é um `ORDER BY` explícito, nunca a ordem implícita.)
 
+`SET threads=4`
+    Limita o paralelismo do motor. Cada thread reserva um piso de memória de
+    trabalho; com um teto tão baixo, o default (uma thread por núcleo) faz esse
+    piso, agregado, estourar o `memory_limit` numa máquina de muitos núcleos —
+    e o motor aborta com out-of-memory ANTES de conseguir spillar. Fixar um
+    número pequeno de threads mantém a demonstração de spill determinística em
+    qualquer máquina, independentemente da contagem de núcleos. Não à toa,
+    reduzir as threads é a primeira solução que o próprio DuckDB sugere no erro
+    de memória — é outro botão do mesmo tema (dimensionar recursos do motor).
+
 Rode com: `uv run examples/04_memory_limit_and_spill.py`
 """
 
@@ -52,6 +62,11 @@ if __name__ == "__main__":
     # Sem ordem de inserção preservada, o DuckDB tem mais liberdade para
     # paralelizar/spillar sem precisar manter a ordem original das linhas.
     con.execute("SET preserve_insertion_order=false")
+    # Teto de memória baixo exige limitar as threads: o default (uma por núcleo)
+    # faz o piso de memória por thread, somado, estourar os 150MB numa máquina de
+    # muitos núcleos, abortando com out-of-memory ANTES de spillar. Um número
+    # pequeno e fixo torna a demonstração determinística em qualquer máquina.
+    con.execute("SET threads=4")
     print(con.sql("SELECT current_setting('memory_limit'), current_setting('temp_directory')").fetchone())
 
     section("ORDER BY sobre as ~33.7M linhas de orders (não cabe nos 150MB configurados)")
