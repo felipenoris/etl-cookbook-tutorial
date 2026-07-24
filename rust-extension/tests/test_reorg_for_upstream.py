@@ -1,9 +1,10 @@
 """Testes de contrato da etapa de reorganização (run_reorg_for_upstream).
 
-Valida o que a etapa promete sobre uma entrada pequena e propositalmente
-embaralhada: nada se perde, a saída fica particionada por faixa e globalmente
-ordenada pela sort key (com id como desempate → reproduzível), e o predicate
-pushdown por min/max, que era inútil no dado embaralhado, passa a valer.
+Valida o que a etapa promete sobre a saída REAL do estágio paralelo (o
+`BoundedRevenueProjector` em Rust) — propositalmente embaralhada na sort key:
+nada se perde, a saída fica particionada por faixa e globalmente ordenada pela
+sort key (com id como desempate → reproduzível), e o predicate pushdown por
+min/max, que era inútil no dado embaralhado, passa a valer.
 """
 
 import sys
@@ -11,9 +12,11 @@ from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
-import pyarrow.dataset as ds
 import pyarrow.parquet as pq
+import pyarrow.dataset as ds
 import pytest
+
+from etl_rust_ext import BoundedRevenueProjector
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -25,27 +28,31 @@ from run_reorg_for_upstream import (  # noqa: E402
 )
 
 N = 40_000
+BATCH = 5_000
 NUM_FAIXAS = 8
 ROW_GROUP = 5_000
 
 
 @pytest.fixture
 def paralelo(tmp_path):
-    """Simula a saída do estágio paralelo: id sequencial, receita EMBARALHADA
-    em relação ao id (é o que a projeção paralela produz na sort key)."""
+    """Saída REAL do estágio paralelo: roda o `BoundedRevenueProjector` (Rust)
+    sobre contratos sintéticos. A `receita_projetada` não tem relação com a ordem
+    de `id_contrato` (e os workers terminam fora de ordem), então o parquet sai
+    embaralhado na sort key — a precondição que a reorganização precisa consertar."""
     rng = np.random.default_rng(7)
-    receita = rng.uniform(100.0, 10_000.0, N)
-    caminho = tmp_path / "paralelo.parquet"
-    pq.write_table(
-        pa.table(
-            {
-                "id_contrato": np.arange(1, N + 1, dtype=np.int64),
-                "receita_projetada": receita,
-            }
-        ),
-        caminho,
-        row_group_size=ROW_GROUP,
+    contratos = pa.table(
+        {
+            "id_contrato": np.arange(1, N + 1, dtype=np.int64),
+            "principal": np.round(rng.uniform(10_000, 500_000, N), 2),
+            "taxa_mensal": np.round(rng.uniform(0.008, 0.025, N), 5),
+            "prazo_meses": rng.integers(60, 361, N, dtype=np.int32),
+        }
     )
+    caminho = tmp_path / "paralelo.parquet"
+    projetor = BoundedRevenueProjector(str(caminho), queue_depth=3)
+    for batch in contratos.to_batches(max_chunksize=BATCH):
+        projetor.submit_batch(batch)  # calcula a receita no Rust, grava incremental
+    projetor.finish()
     return caminho
 
 
@@ -94,11 +101,15 @@ def test_saida_e_ordem_total_deterministica_com_desempate(paralelo, tmp_path):
 
 
 def test_reorganizar_restaura_o_predicate_pushdown(paralelo, tmp_path):
-    receita = pq.read_table(paralelo)["receita_projetada"].to_numpy()
-    lo, hi = np.percentile(receita, [48, 52])  # faixa estreita: só ~4% passa
+    tab = pq.read_table(paralelo)
+    lo, hi = np.percentile(tab["receita_projetada"].to_numpy(), [48, 52])  # ~4% passa
 
-    # antes: dado embaralhado -> quase nenhum row group é pulável
-    pul_antes, tot_antes = row_groups_pulaveis([paralelo], "receita_projetada", lo, hi)
+    # antes: MESMO dado, mesmo row group, sem ordenar (isola o efeito da ordenação e
+    # garante múltiplos row groups mesmo que o projetor grave a saída num só) ->
+    # embaralhado, quase nenhum row group é pulável
+    controle = tmp_path / "controle_desordenado.parquet"
+    pq.write_table(tab, controle, row_group_size=ROW_GROUP)
+    pul_antes, tot_antes = row_groups_pulaveis([controle], "receita_projetada", lo, hi)
 
     saida = _reorganiza(paralelo, tmp_path)
     arquivos = sorted(saida.rglob("*.parquet"))
