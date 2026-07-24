@@ -12,6 +12,10 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# Mesma blindagem do check_all.sh: sem PYTHONPATH herdado, para que os
+# diretórios-irmãos (pandas/, pyarrow/, DuckDB/) não sombreiem os pacotes reais.
+unset PYTHONPATH
+
 DEEP=false
 if [[ "${1:-}" == "--all" ]]; then
     DEEP=true

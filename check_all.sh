@@ -18,6 +18,14 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# Ambiente isolado: este cookbook resolve TODAS as dependências via uv (um venv
+# por subprojeto). Um PYTHONPATH herdado do shell não tem uso legítimo aqui e,
+# se apontar para a raiz do repo, os diretórios-irmãos `pandas/`, `pyarrow/` e
+# `DuckDB/` passam a sombrear os pacotes reais do PyPI (p.ex. o pyarrow importa
+# `pandas` de forma lazy e acha o diretório `pandas/` deste repo). Limpar aqui
+# blinda todas as etapas de uma vez.
+unset PYTHONPATH
+
 DUCKDB_FLAGS=""
 if [[ "${1:-}" == "--no-network" ]]; then
     DUCKDB_FLAGS="--no-network"

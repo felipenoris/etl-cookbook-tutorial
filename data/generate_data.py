@@ -36,13 +36,24 @@ metadados PEP 723 acima, ignorando qualquer venv ativo ou projeto ao redor):
 from __future__ import annotations
 
 import argparse
+import sys
 from decimal import Decimal
 from pathlib import Path
 
-import numpy as np
-import pyarrow as pa
-import pyarrow.compute as pc
-import pyarrow.parquet as pq
+# Blinda o script contra um PYTHONPATH poluído com a raiz do repo (comum em
+# setups de dev): os subprojetos-irmãos `pandas/`, `pyarrow/` e `DuckDB/` têm o
+# mesmo nome de pacotes do PyPI. Se a raiz estiver no sys.path, o import lazy de
+# `pandas` feito pelo pyarrow dentro de `pa.array(...)` encontra o diretório
+# `pandas/` deste repo (namespace package, sem `__version__`) em vez do pacote
+# real e quebra. Este script só usa numpy/pyarrow do ambiente isolado (PEP 723),
+# então remover a raiz do sys.path é seguro.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path[:] = [p for p in sys.path if p and Path(p).resolve() != _REPO_ROOT]
+
+import numpy as np  # noqa: E402  (import após sanear o sys.path acima)
+import pyarrow as pa  # noqa: E402
+import pyarrow.compute as pc  # noqa: E402
+import pyarrow.parquet as pq  # noqa: E402
 
 RNG_SEED = 42
 DATA_DIR = Path(__file__).resolve().parent
