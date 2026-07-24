@@ -36,34 +36,34 @@ else
 fi
 
 step 2/9 "pandas: suíte pytest (os smoke tests executam os 10 exemplos)"
-(cd pandas && uv run pytest)
+(cd exemplos-pandas && uv run pytest)
 
 step 3/9 "pyarrow: suíte pytest (13 exemplos)"
-(cd pyarrow && uv run pytest)
+(cd exemplos-pyarrow && uv run pytest)
 
 step 4/9 "DuckDB: suíte pytest (23 exemplos)"
-(cd DuckDB && uv run pytest $DUCKDB_FLAGS)
+(cd exemplos-DuckDB && uv run pytest $DUCKDB_FLAGS)
 
 step 5/9 "rust-extension: suíte pytest (compila a extensão via maturin no 1º uso)"
-(cd rust-extension && uv run pytest)
+(cd exemplos-rust-extension && uv run pytest)
 
 step 6/9 "ETL completo (DuckDB -> pyarrow -> Rust -> pandas -> parquet)"
-(cd rust-extension && uv run run_etl.py)
+(cd exemplos-rust-extension && uv run run_etl.py)
 
 step 7/9 "Projeção paralela, reorganização pré-upstream, tipos Arrow e 1:N no Rust"
-(cd rust-extension && uv run run_contracts_parallel.py)
-(cd rust-extension && uv run run_reorg_for_upstream.py)
-(cd rust-extension && uv run run_data_types.py)
-(cd rust-extension && uv run run_nested_params.py)
+(cd exemplos-rust-extension && uv run run_contracts_parallel.py)
+(cd exemplos-rust-extension && uv run run_reorg_for_upstream.py)
+(cd exemplos-rust-extension && uv run run_data_types.py)
+(cd exemplos-rust-extension && uv run run_nested_params.py)
 
 step 8/9 "sqlalchemy-contract: suíte pytest (contrato, ORM vs colunar/lote, hierarquia)"
-(cd sqlalchemy-contract && uv run pytest)
+(cd exemplos-sqlalchemy-contract && uv run pytest)
 
 step 9/9 "Documentação: doctest do docs_demo, pdoc (docs/) e cargo doc (target/doc/)"
-(cd rust-extension && uv run python -m doctest docs_demo.py -v > /dev/null)
-(cd rust-extension && uv run pdoc --math --mermaid --docformat google --template-dir pdoc-templates --output-dir docs \
+(cd exemplos-rust-extension && uv run python -m doctest docs_demo.py -v > /dev/null)
+(cd exemplos-rust-extension && uv run pdoc --math --mermaid --docformat google --template-dir pdoc-templates --output-dir docs \
     etl_rust_ext ./run_etl.py ./run_contracts_parallel.py ./run_reorg_for_upstream.py ./run_data_types.py ./run_nested_params.py ./docs_demo.py)
-(cd rust-extension && cargo doc --no-deps --document-private-items)
+(cd exemplos-rust-extension && cargo doc --no-deps --document-private-items)
 
-printf '\n\033[1;32mTudo OK!\033[0m Documentação em rust-extension/docs/index.html '
-printf 'e rust-extension/target/doc/_etl_rust_ext/index.html\n'
+printf '\n\033[1;32mTudo OK!\033[0m Documentação em exemplos-rust-extension/docs/index.html '
+printf 'e exemplos-rust-extension/target/doc/_etl_rust_ext/index.html\n'

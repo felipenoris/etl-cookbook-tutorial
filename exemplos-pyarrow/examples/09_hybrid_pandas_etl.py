@@ -19,7 +19,7 @@ Conceitos:
   anexados a um mesmo arquivo parquet, lote a lote.
 - `ds.write_dataset(..., existing_data_behavior="delete_matching")`: recarga
   idempotente de partição no pyarrow (equivalente do `OVERWRITE_OR_IGNORE`
-  do DuckDB, exemplo `../DuckDB/examples/06`).
+  do DuckDB, exemplo `../exemplos-DuckDB/examples/06`).
 
 Rode com: `uv run examples/09_hybrid_pandas_etl.py`
 """

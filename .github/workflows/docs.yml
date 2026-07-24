@@ -65,8 +65,8 @@ jobs:
       - name: Montar site (_site/)
         run: |
           mkdir -p _site/python _site/rust
-          cp -r rust-extension/docs/. _site/python/
-          cp -r rust-extension/target/doc/. _site/rust/
+          cp -r exemplos-rust-extension/docs/. _site/python/
+          cp -r exemplos-rust-extension/target/doc/. _site/rust/
           cp .github/pages/index.html _site/index.html
           touch _site/.nojekyll
 

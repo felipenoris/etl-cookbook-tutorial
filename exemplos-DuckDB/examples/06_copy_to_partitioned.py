@@ -24,7 +24,7 @@ Comandos usados:
 `FILE_SIZE_BYTES '16MB'`
     Quebra a saída em múltiplos arquivos (`data_0.parquet`, `data_1...`) —
     mesmo assunto do `max_rows_per_file` do pyarrow em
-    `rust-extension/run_etl.py`. O limite vale para o tamanho ANTES da
+    `exemplos-rust-extension/run_etl.py`. O limite vale para o tamanho ANTES da
     compressão e por thread, então os arquivos finais saem menores que o
     nominal.
 

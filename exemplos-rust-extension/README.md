@@ -9,7 +9,7 @@ com um ETL completo que usa DuckDB, pyarrow, pandas e Rust juntos.
 ## Estrutura
 
 ```
-rust-extension/
+exemplos-rust-extension/
   Cargo.toml              # crate Rust: pyo3 + pyo3-arrow
   pyproject.toml          # build-system = maturin (compilado automaticamente por `uv sync`)
   src/lib.rs              # funções expostas ao Python (ver "Funções expostas" abaixo)
@@ -28,7 +28,7 @@ rust-extension/
 ## Setup e build
 
 ```bash
-cd rust-extension
+cd exemplos-rust-extension
 uv sync   # compila a extensão Rust via maturin automaticamente
 ```
 
@@ -60,9 +60,9 @@ durante o build. Qualquer mudança em `src/lib.rs` exige rodar `uv sync` (ou
   cliente num único loop sequencial com estado (`HashMap<customer_id, total>`)
   e classifica um tier (bronze/prata/ouro) segundo os thresholds informados.
   O MESMO cálculo aparece em Python puro nos exemplos "sequential_stateful_loop"
-  de [`../pandas`](../pandas/examples/10_sequential_stateful_loop.py),
-  [`../pyarrow`](../pyarrow/examples/11_sequential_stateful_loop.py) e
-  [`../DuckDB`](../DuckDB/examples/15_sequential_stateful_loop.py) — que
+  de [`../exemplos-pandas`](../exemplos-pandas/examples/10_sequential_stateful_loop.py),
+  [`../exemplos-pyarrow`](../exemplos-pyarrow/examples/11_sequential_stateful_loop.py) e
+  [`../exemplos-DuckDB`](../exemplos-DuckDB/examples/15_sequential_stateful_loop.py) — que
   exercitam a API de streaming de cada biblioteca e mostram por que esse caso
   (lógica sequencial que não vetoriza) é onde uma extensão nativa compensa.
 - `project_revenue_batch(batch)` / classes `ParallelRevenueProjector` (paralelo
@@ -227,7 +227,7 @@ uv run run_etl.py
 
 Lê `../data/raw/{orders,customers,products}`, junta as 3 tabelas via DuckDB
 (com `memory_limit`/`temp_directory` configurados para exercitar spill, igual
-ao exemplo `../DuckDB/examples/04_memory_limit_and_spill.py`), enriquece com
+ao exemplo `../exemplos-DuckDB/examples/04_memory_limit_and_spill.py`), enriquece com
 a extensão Rust, resume com pandas (backend Arrow) e grava o resultado em
 `../data/rich/order_metrics/`, particionado por `customer_tier`.
 

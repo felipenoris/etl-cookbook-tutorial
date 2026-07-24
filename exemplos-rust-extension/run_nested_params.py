@@ -135,7 +135,7 @@ def gerar_contratos_com_parametros(n: int) -> pa.RecordBatch:
 
     Num cenário real, este batch viria de um JOIN no DuckDB entre a tabela de
     contratos e a de parâmetros, agregando os parâmetros com ``list(...)`` —
-    exatamente o que o ``DuckDB/examples/09`` demonstra. Aqui geramos direto
+    exatamente o que o ``exemplos-DuckDB/examples/09`` demonstra. Aqui geramos direto
     para o exemplo ser autocontido.
     """
     rng = np.random.default_rng(RNG_SEED)

@@ -62,7 +62,7 @@ Duas conclusões, e a ordem entre elas importa:
 **A lição prática**: use SQL sempre que a lógica for expressável nele; recorra
 a UDF Python quando não for, escolhendo a variante pela clareza (a diferença
 entre elas é pequena perto do custo de já ter saído do motor); e desça para
-uma extensão nativa (`../rust-extension`) quando o cálculo por entidade for
+uma extensão nativa (`../exemplos-rust-extension`) quando o cálculo por entidade for
 pesado o bastante para justificar.
 
 Rode com: `uv run examples/10_macros_and_python_udfs.py`

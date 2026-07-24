@@ -8,7 +8,7 @@ isso é o caso em que uma extensão nativa compensa. Aqui o objetivo é o
 oposto: exercitar a API do pyarrow para percorrer dados em lotes, mesmo
 sabendo que o laço linha a linha é lento.
 
-O padrão (o mesmo dos irmãos em `../pandas` e `../DuckDB`):
+O padrão (o mesmo dos irmãos em `../exemplos-pandas` e `../exemplos-DuckDB`):
 
 1. **entrada em lotes**: `Table.to_batches(max_chunksize=n)` fatia a tabela em
    `RecordBatch`es — a unidade natural de iteração do Arrow;

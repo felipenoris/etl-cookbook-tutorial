@@ -17,12 +17,12 @@ etl-cookbook-tutorial/
   data/
     generate_data.py   # gera as bases fictícias (script standalone, PEP 723)
     raw/               # parquet particionado de entrada (customers, products, orders)
-    rich/              # parquet de saída do ETL (rust-extension/run_etl.py)
-  pandas/              # API do pandas com backend Arrow
-  pyarrow/             # API nativa do pyarrow
-  DuckDB/              # SQL em memória sobre parquet, com spill configurável
-  rust-extension/      # extensão Rust (PyO3 + pyo3-arrow) + ETL completo + docs (pdoc)
-  sqlalchemy-contract/ # migração do padrão ORM: modelos como contrato, ORM vs colunar, árvore de contas
+    rich/              # parquet de saída do ETL (exemplos-rust-extension/run_etl.py)
+  exemplos-pandas/              # API do pandas com backend Arrow
+  exemplos-pyarrow/             # API nativa do pyarrow
+  exemplos-DuckDB/              # SQL em memória sobre parquet, com spill configurável
+  exemplos-rust-extension/      # extensão Rust (PyO3 + pyo3-arrow) + ETL completo + docs (pdoc)
+  exemplos-sqlalchemy-contract/ # migração do padrão ORM: modelos como contrato, ORM vs colunar, árvore de contas
 ```
 
 ## Mapa de objetivos
@@ -31,13 +31,13 @@ etl-cookbook-tutorial/
 | --- | --- | --- |
 | O1 | Python | todos os projetos |
 | O2 | `uv` para gerenciar dependências | um `pyproject.toml`/`.venv` isolado por pasta |
-| O3 | Extensão Python em Rust via PyO3 | [`rust-extension/src/lib.rs`](rust-extension/src/lib.rs) |
-| O4 | pyarrow | [`pyarrow/`](pyarrow), e usado também em `pandas`/`DuckDB`/`rust-extension` |
-| O5 | pandas com Arrow como backend | [`pandas/`](pandas) (`dtype_backend="pyarrow"`) |
-| O6 | Passagem zero-copy Python↔Rust via `pyo3-arrow` | [`rust-extension/`](rust-extension) (inspirado em [pyo3-cookbook](https://github.com/felipenoris/pyo3-cookbook)) |
+| O3 | Extensão Python em Rust via PyO3 | [`exemplos-rust-extension/src/lib.rs`](exemplos-rust-extension/src/lib.rs) |
+| O4 | pyarrow | [`exemplos-pyarrow/`](exemplos-pyarrow), e usado também em `exemplos-pandas`/`exemplos-DuckDB`/`exemplos-rust-extension` |
+| O5 | pandas com Arrow como backend | [`exemplos-pandas/`](exemplos-pandas) (`dtype_backend="pyarrow"`) |
+| O6 | Passagem zero-copy Python↔Rust via `pyo3-arrow` | [`exemplos-rust-extension/`](exemplos-rust-extension) (inspirado em [pyo3-cookbook](https://github.com/felipenoris/pyo3-cookbook)) |
 | O7 | ETL a partir de parquet particionado | [`data/raw/`](data/raw) (orders, customers, products) |
-| O8 | DuckDB com JOIN/SQL complexo + spill | [`DuckDB/`](DuckDB) |
-| O9 | Documentação HTML estática a partir de docstrings | [`rust-extension/docs/`](rust-extension/docs) (gerado com `pdoc`, abre via `file://`) |
+| O8 | DuckDB com JOIN/SQL complexo + spill | [`exemplos-DuckDB/`](exemplos-DuckDB) |
+| O9 | Documentação HTML estática a partir de docstrings | [`exemplos-rust-extension/docs/`](exemplos-rust-extension/docs) (gerado com `pdoc`, abre via `file://`) |
 
 ## Base de dados fictícia (`data/raw`)
 
@@ -137,10 +137,10 @@ Observações que os exemplos demonstram na prática:
   antes do join. No Rust, a escrita usa os builders do arrow-rs
   (`ListBuilder`, `MapBuilder`, `StructArray`) — ver `roundtrip_all_types`
   em `rust-extension`, que exercita leitura e escrita dos 11 tipos.
-- Onde ver cada camada: [`pyarrow/examples/10`](pyarrow/examples/10_data_types.py),
-  [`pandas/examples/09`](pandas/examples/09_arrow_data_types.py),
-  [`DuckDB/examples/14`](DuckDB/examples/14_data_types.py) e
-  [`rust-extension/run_data_types.py`](rust-extension/run_data_types.py).
+- Onde ver cada camada: [`exemplos-pyarrow/examples/10`](exemplos-pyarrow/examples/10_data_types.py),
+  [`exemplos-pandas/examples/09`](exemplos-pandas/examples/09_arrow_data_types.py),
+  [`exemplos-DuckDB/examples/14`](exemplos-DuckDB/examples/14_data_types.py) e
+  [`exemplos-rust-extension/run_data_types.py`](exemplos-rust-extension/run_data_types.py).
 
 ## Performance: comparando as abordagens
 
@@ -163,36 +163,36 @@ Três siglas aparecem abaixo:
 - **UDF** (*User-Defined Function*) — função escrita por você e registrada no
   motor SQL para ser chamada de dentro de uma consulta; no DuckDB, pode ser em
   Python, injetando lógica que o SQL não expressa nativamente (ver
-  [`DuckDB/10`](DuckDB/examples/10_macros_and_python_udfs.py)).
+  [`exemplos-DuckDB/10`](exemplos-DuckDB/examples/10_macros_and_python_udfs.py)).
 - **N+1** — a armadilha do ORM em que carregar N registros relacionados dispara
   uma query inicial *mais uma query por registro* (1 + N idas ao banco), em vez
-  de trazer tudo de uma vez (ver [`sqlalchemy-contract/04`](sqlalchemy-contract/examples/04_orm_vs_batch.py)).
+  de trazer tudo de uma vez (ver [`exemplos-sqlalchemy-contract/04`](exemplos-sqlalchemy-contract/examples/04_orm_vs_batch.py)).
 - **GIL** (*Global Interpreter Lock*) — o mecanismo do CPython que permite só
   uma thread executar bytecode Python por vez; código Rust nativo pode
-  liberá-lo e assim rodar em paralelo de verdade (ver [`rust-extension`](rust-extension/README.md)).
+  liberá-lo e assim rodar em paralelo de verdade (ver [`exemplos-rust-extension`](exemplos-rust-extension/README.md)).
 
 | Abordagem | Vazão medida | Exemplo | Vantagens | Desvantagens |
 | --- | --- | --- | --- | --- |
-| **ORM com lazy loading** (N+1) | **~20k linhas/s** | [`sqlalchemy-contract/04`](sqlalchemy-contract/examples/04_orm_vs_batch.py) | a mais produtiva de escrever; navegação natural | N+1 silencioso; paga os 5 custos do ORM |
-| **ORM com eager loading** | **~80k linhas/s** | [`sqlalchemy-contract/04`](sqlalchemy-contract/examples/04_orm_vs_batch.py) | elimina o N+1 mantendo a ergonomia | 1 objeto Python por linha (GC, refcount) |
-| **INSERT via ORM** (escrita) | **~50k linhas/s** | [`sqlalchemy-contract/02`](sqlalchemy-contract/examples/02_orm_vs_columnar.py) | unit of work cuida de tudo | inviável para carga massiva |
-| **SQLAlchemy Core** (executemany) | **~320k linhas/s** | [`sqlalchemy-contract/02`](sqlalchemy-contract/examples/02_orm_vs_columnar.py) | sem objetos ORM; ainda é SQL portável | continua orientado a linha |
-| **Linhas brutas + laço Python** | **~670k linhas/s** ¹ | [`sqlalchemy-contract/04`](sqlalchemy-contract/examples/04_orm_vs_batch.py) | simples; sem dependência extra | limitado pelo interpretador *e pela carga por linha* |
-| **UDF Python no DuckDB** | **~10-16M linhas/s** ¹ | [`DuckDB/10`](DuckDB/examples/10_macros_and_python_udfs.py) | lógica Python arbitrária dentro do SQL | **24-39x mais lento que o SQL equivalente** (medido com controle) |
-| **SQL colunar puro** (DuckDB) | **~300-650M linhas/s** | [`DuckDB/03`](DuckDB/examples/03_joins_and_aggregations.py), [`DuckDB/12`](DuckDB/examples/12_performance_without_indexes.py) | vetorizado e paralelo; sem código por linha | só o que é expressável em SQL |
-| **Escrita colunar** (Arrow→parquet) | **~4.3M linhas/s** | [`sqlalchemy-contract/02`](sqlalchemy-contract/examples/02_orm_vs_columnar.py) | ~87x o INSERT do ORM | destino é arquivo, não tabela transacional |
-| **Rust serial** (pyo3-arrow) | **~2.2M contratos/s** | [`rust-extension`](rust-extension/run_contracts_parallel.py) | cálculo com estado, impossível de vetorizar | exige toolchain Rust |
-| **Rust multithread** | **~12M contratos/s** | [`rust-extension`](rust-extension/run_contracts_parallel.py) | ~5,5x sobre o serial (11 CPUs), fora do GIL | complexidade de concorrência |
-| **Rust, fatias emprestadas** | **~55M contratos/s** | [`rust-extension/run_nested_params.py`](rust-extension/run_nested_params.py) | zero alocação/cópia sobre `ListArray` | exige pensar em lifetimes |
-| **Pipeline completo de ETL** | **~4M linhas/s** | [`rust-extension/run_etl.py`](rust-extension/run_etl.py) | 33,7M linhas em ~8s: join+sort+Rust+escrita | — |
+| **ORM com lazy loading** (N+1) | **~20k linhas/s** | [`exemplos-sqlalchemy-contract/04`](exemplos-sqlalchemy-contract/examples/04_orm_vs_batch.py) | a mais produtiva de escrever; navegação natural | N+1 silencioso; paga os 5 custos do ORM |
+| **ORM com eager loading** | **~80k linhas/s** | [`exemplos-sqlalchemy-contract/04`](exemplos-sqlalchemy-contract/examples/04_orm_vs_batch.py) | elimina o N+1 mantendo a ergonomia | 1 objeto Python por linha (GC, refcount) |
+| **INSERT via ORM** (escrita) | **~50k linhas/s** | [`exemplos-sqlalchemy-contract/02`](exemplos-sqlalchemy-contract/examples/02_orm_vs_columnar.py) | unit of work cuida de tudo | inviável para carga massiva |
+| **SQLAlchemy Core** (executemany) | **~320k linhas/s** | [`exemplos-sqlalchemy-contract/02`](exemplos-sqlalchemy-contract/examples/02_orm_vs_columnar.py) | sem objetos ORM; ainda é SQL portável | continua orientado a linha |
+| **Linhas brutas + laço Python** | **~670k linhas/s** ¹ | [`exemplos-sqlalchemy-contract/04`](exemplos-sqlalchemy-contract/examples/04_orm_vs_batch.py) | simples; sem dependência extra | limitado pelo interpretador *e pela carga por linha* |
+| **UDF Python no DuckDB** | **~10-16M linhas/s** ¹ | [`exemplos-DuckDB/10`](exemplos-DuckDB/examples/10_macros_and_python_udfs.py) | lógica Python arbitrária dentro do SQL | **24-39x mais lento que o SQL equivalente** (medido com controle) |
+| **SQL colunar puro** (DuckDB) | **~300-650M linhas/s** | [`exemplos-DuckDB/03`](exemplos-DuckDB/examples/03_joins_and_aggregations.py), [`exemplos-DuckDB/12`](exemplos-DuckDB/examples/12_performance_without_indexes.py) | vetorizado e paralelo; sem código por linha | só o que é expressável em SQL |
+| **Escrita colunar** (Arrow→parquet) | **~4.3M linhas/s** | [`exemplos-sqlalchemy-contract/02`](exemplos-sqlalchemy-contract/examples/02_orm_vs_columnar.py) | ~87x o INSERT do ORM | destino é arquivo, não tabela transacional |
+| **Rust serial** (pyo3-arrow) | **~2.2M contratos/s** | [`exemplos-rust-extension`](exemplos-rust-extension/run_contracts_parallel.py) | cálculo com estado, impossível de vetorizar | exige toolchain Rust |
+| **Rust multithread** | **~12M contratos/s** | [`exemplos-rust-extension`](exemplos-rust-extension/run_contracts_parallel.py) | ~5,5x sobre o serial (11 CPUs), fora do GIL | complexidade de concorrência |
+| **Rust, fatias emprestadas** | **~55M contratos/s** | [`exemplos-rust-extension/run_nested_params.py`](exemplos-rust-extension/run_nested_params.py) | zero alocação/cópia sobre `ListArray` | exige pensar em lifetimes |
+| **Pipeline completo de ETL** | **~4M linhas/s** | [`exemplos-rust-extension/run_etl.py`](exemplos-rust-extension/run_etl.py) | 33,7M linhas em ~8s: join+sort+Rust+escrita | — |
 
 ### Os cinco custos que explicam a tabela
 
-A [decomposição detalhada](sqlalchemy-contract/README.md#por-que-o-orm-é-lento-os-cinco-custos)
+A [decomposição detalhada](exemplos-sqlalchemy-contract/README.md#por-que-o-orm-é-lento-os-cinco-custos)
 está no `sqlalchemy-contract`: (1) metadados por linha, (2) escrituração do
 ORM, (3) travessia de fronteira por linha, (4) execução interpretada e (5)
 alocação de heap por linha. Cada degrau da tabela elimina um subconjunto
-deles. O [estudo em Rust](rust-extension/run_nested_params.py) mostra que
+deles. O [estudo em Rust](exemplos-rust-extension/run_nested_params.py) mostra que
 **quatro dos cinco desaparecem só por sair do Python** — por isso a mesma
 lição ("não processe linha a linha") custa ~4x lá e ~258x aqui.
 
@@ -236,7 +236,7 @@ de 11 CPUs, dados em cache do SO.
 - **UDF Python** quando a lógica não couber em SQL mas o volume for moderado.
 - **Rust** quando houver cálculo sequencial com estado por entidade (projeções
   financeiras, simulações) sobre volume alto — e aí use
-  [pool com backpressure](rust-extension/README.md) para manter memória
+  [pool com backpressure](exemplos-rust-extension/README.md) para manter memória
   constante.
 - **ORM** apenas fora do caminho de dados: schema/contrato e consultas
   pontuais.
@@ -286,18 +286,18 @@ ligando a documentação Python (`/python`) e a Rust (`/rust`).
 1. `uv run --script data/generate_data.py --generate` — obrigatório após clonar o
    repositório, já que os parquet não são versionados (o `./check_all.sh`
    acima já faz isso automaticamente).
-2. [`pandas/`](pandas) e [`pyarrow/`](pyarrow) — mesmos conceitos (seleção,
+2. [`exemplos-pandas/`](exemplos-pandas) e [`exemplos-pyarrow/`](exemplos-pyarrow) — mesmos conceitos (seleção,
    limpeza, groupby, joins, pivot), comparando a API de alto nível do pandas
    com a API nativa do Arrow — mais o interop zero-copy entre as duas e o
    padrão híbrido (pyarrow nas bordas, pandas no miolo) para equipes
    proficientes em pandas.
-3. [`DuckDB/`](DuckDB) — os mesmos joins/agregações em SQL, mais o exemplo de
+3. [`exemplos-DuckDB/`](exemplos-DuckDB) — os mesmos joins/agregações em SQL, mais o exemplo de
    `memory_limit`/spill em disco e um bloco de funcionalidades de ETL:
    `COPY TO` particionado com recarga idempotente, staging persistente com
    UPSERT, ingestão de CSV com quarentena de rejeitadas, SQL avançado
    (recursiva, `PIVOT`, `ASOF JOIN`), macros/UDFs Python e
    `EXPORT`/`IMPORT DATABASE`.
-4. [`rust-extension/`](rust-extension) — fecha o ciclo: um ETL real que usa
+4. [`exemplos-rust-extension/`](exemplos-rust-extension) — fecha o ciclo: um ETL real que usa
    DuckDB (extract+join+spill) → pyarrow (projeção) → Rust via `pyo3-arrow`
    (transformação com estado, zero-copy) → pandas (resumo) → grava em
    `data/rich/order_metrics/`. Além do pipeline, exercita **multithreading**
@@ -305,7 +305,7 @@ ligando a documentação Python (`/python`) e a Rust (`/rust`).
    por backpressure), **todos os tipos Arrow** manipulados no lado nativo
    (incluindo `decimal.Decimal`/`datetime.date` cruzando a fronteira) e o
    estudo de **materialização de dados 1:N** (copiar vs. emprestar fatias).
-5. [`sqlalchemy-contract/`](sqlalchemy-contract) — para equipes vindas do
+5. [`exemplos-sqlalchemy-contract/`](exemplos-sqlalchemy-contract) — para equipes vindas do
    padrão ORM + banco relacional efêmero: modelos SQLAlchemy no papel de
    contrato de schema (não de veículo de dados), a decomposição dos **cinco
    custos** que tornam o ORM lento, medidos na escrita (ORM vs. Core vs.
@@ -322,11 +322,11 @@ Cada projeto tem sua própria suíte pytest (smoke tests dos exemplos + testes
 unitários dos contratos assumidos). Para rodar tudo, a partir da raiz:
 
 ```bash
-(cd pandas && uv run pytest)
-(cd pyarrow && uv run pytest)
-(cd DuckDB && uv run pytest)
-(cd rust-extension && uv run pytest)   # -m "not slow" pula o pipeline completo
-(cd sqlalchemy-contract && uv run pytest)
+(cd exemplos-pandas && uv run pytest)
+(cd exemplos-pyarrow && uv run pytest)
+(cd exemplos-DuckDB && uv run pytest)
+(cd exemplos-rust-extension && uv run pytest)   # -m "not slow" pula o pipeline completo
+(cd exemplos-sqlalchemy-contract && uv run pytest)
 ```
 
 ## Referências
@@ -339,8 +339,8 @@ Ferramentas usadas em todo o tutorial:
 - [pytest — documentação oficial](https://docs.pytest.org/en/stable/) — usado nas suítes de teste de todas as subpastas.
 
 Referências específicas de cada tecnologia estão no `README.md` da subpasta
-correspondente ([`pandas/`](pandas), [`pyarrow/`](pyarrow), [`DuckDB/`](DuckDB),
-[`rust-extension/`](rust-extension)).
+correspondente ([`exemplos-pandas/`](exemplos-pandas), [`exemplos-pyarrow/`](exemplos-pyarrow), [`exemplos-DuckDB/`](exemplos-DuckDB),
+[`exemplos-rust-extension/`](exemplos-rust-extension)).
 
 ## Licença
 

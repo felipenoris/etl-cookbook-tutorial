@@ -63,7 +63,7 @@ jobs:
         with:
           name: documentacao-html
           path: |
-            rust-extension/docs
-            rust-extension/target/doc
+            exemplos-rust-extension/docs
+            exemplos-rust-extension/target/doc
           if-no-files-found: ignore
           retention-days: 14

@@ -8,7 +8,7 @@ isso é o caso em que uma extensão nativa compensa. Aqui o objetivo é o
 oposto: exercitar a API do pandas para percorrer linhas em lotes, mesmo
 sabendo que iterar linha a linha é o anti-padrão de performance do pandas.
 
-O padrão (o mesmo dos irmãos em `../pyarrow` e `../DuckDB`):
+O padrão (o mesmo dos irmãos em `../exemplos-pyarrow` e `../exemplos-DuckDB`):
 
 1. **entrada em lotes**: o pandas não tem um leitor streaming nativo, então
    fatiamos o DataFrame ordenado em blocos com `range`/`iloc` — simulando o

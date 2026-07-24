@@ -11,7 +11,7 @@ fonte única da verdade dos metadados. As mudanças em relação ao original:
   local via ``create_all``);
 - ``valor`` deixou de ser ``Double`` e virou ``Numeric(12, 2)`` — lançamento
   financeiro é decimal de 2 casas (padrão do projeto), nunca float
-  (``0.10 + 0.20 != 0.30`` em binário; ver `pyarrow/examples/10`);
+  (``0.10 + 0.20 != 0.30`` em binário; ver `exemplos-pyarrow/examples/10`);
 - ``String`` ganhou comprimentos explícitos — o ``VARCHAR(n)`` do Redshift
   exige, e o parquet não tem onde guardar essa informação.
 

@@ -6,7 +6,7 @@ Conceitos:
 - Arrow não tem uma operação de pivot embutida (diferente do pandas); o jeito
   idiomático é: `group_by` para agregar, depois reformatar manualmente
   construindo uma coluna por valor distinto — bom contraste didático com o
-  `pivot_table` visto em `pandas/examples/06_pivot_table.py`.
+  `pivot_table` visto em `exemplos-pandas/examples/06_pivot_table.py`.
 
 Rode com: `uv run examples/07_sorting_and_pivot_like.py`
 """
