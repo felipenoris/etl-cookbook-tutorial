@@ -39,9 +39,9 @@ etl-cookbook-tutorial/
   exemplos-DuckDB/                # in-memory SQL over parquet, with configurable spill
   exemplos-rust-extension/        # Rust extension (PyO3 + pyo3-arrow) + full ETL + docs (pdoc/rustdoc)
   exemplos-sqlalchemy-contract/   # ORM-pattern migration: models as schema contract, ORM vs columnar
-  check_all.sh           # one command: generate data, run all suites, build docs
-  clean_all.sh           # inverse of check_all.sh: remove generated artifacts
-  .github/workflows/     # ci.yml (runs check_all.sh) + docs.yml (publishes to GitHub Pages)
+  check-all.sh           # one command: generate data, run all suites, build docs
+  clean-all.sh           # inverse of check-all.sh: remove generated artifacts
+  .github/workflows/     # ci.yml (runs check-all.sh) + docs.yml (publishes to GitHub Pages)
 ```
 
 The five subprojects (`exemplos-pandas`, `exemplos-pyarrow`, `exemplos-DuckDB`,
@@ -59,7 +59,7 @@ top-level Python package and no shared virtualenv.
 - **Rust toolchain** ([rustup.rs](https://rustup.rs)) — `cargo`/`rustc`, only
   for `exemplos-rust-extension` (compiling the PyO3 extension via maturin and generating
   rustdoc).
-- **bash** — for `check_all.sh` / `clean_all.sh`.
+- **bash** — for `check-all.sh` / `clean-all.sh`.
 - **Internet on first run** — for `uv`/`cargo` to fetch dependencies.
   Afterward, only 3 DuckDB tests (public S3 buckets, example 13) need network.
 
@@ -73,12 +73,12 @@ execute every example, runs the rust-extension standalone scripts, builds all
 docs). Any failure aborts:
 
 ```bash
-./check_all.sh                # full run (3 DuckDB tests use the internet)
-./check_all.sh --no-network   # skip the internet-dependent tests
+./check-all.sh                # full run (3 DuckDB tests use the internet)
+./check-all.sh --no-network   # skip the internet-dependent tests
 ```
 
 Generate / clean the dataset (parquet is **not** committed — regenerate after a
-fresh clone; `check_all.sh` does this automatically):
+fresh clone; `check-all.sh` does this automatically):
 
 ```bash
 uv run --script data/generate_data.py --generate           # generate into data/raw
@@ -86,11 +86,11 @@ uv run --script data/generate_data.py --clean              # remove parquet from
 uv run --script data/generate_data.py --clean --generate   # regenerate from scratch
 ```
 
-Remove generated artifacts (inverse of `check_all.sh`):
+Remove generated artifacts (inverse of `check-all.sh`):
 
 ```bash
-./clean_all.sh          # remove generated artifacts (keeps the .venv)
-./clean_all.sh --all    # also remove .venv + lockfiles (post-clone state)
+./clean-all.sh          # remove generated artifacts (keeps the .venv)
+./clean-all.sh --all    # also remove .venv + lockfiles (post-clone state)
 ```
 
 Per-project work — always operate **inside** the subproject directory:
@@ -143,10 +143,10 @@ Per-project work — always operate **inside** the subproject directory:
 Each subproject has its own pytest suite = smoke tests (every example runs) +
 unit tests asserting the contracts each example assumes. `testpaths = ["tests"]`
 is set in every `pyproject.toml`, and `tests/conftest.py` puts `examples/` on
-`sys.path`. The fastest full verification is `./check_all.sh` (add
+`sys.path`. The fastest full verification is `./check-all.sh` (add
 `--no-network` when offline). Before pushing changes that touch code, run the
-affected subproject's suite (or `./check_all.sh`) — CI runs exactly
-`./check_all.sh`.
+affected subproject's suite (or `./check-all.sh`) — CI runs exactly
+`./check-all.sh`.
 
 ## Documentation
 
@@ -156,12 +156,12 @@ affected subproject's suite (or `./check_all.sh`) — CI runs exactly
 - **Rust side:** `cargo doc --no-deps --document-private-items` renders rustdoc
   from `//!`/`///` comments in `src/lib.rs` (private items needed because the
   `#[pyfunction]`s are private).
-- `check_all.sh` step 9 builds both; `docs.yml` publishes them to GitHub Pages
+- `check-all.sh` step 9 builds both; `docs.yml` publishes them to GitHub Pages
   on every push to `main`.
 
 ## CI
 
-`.github/workflows/ci.yml` runs `./check_all.sh` on pushes to `main` and
+`.github/workflows/ci.yml` runs `./check-all.sh` on pushes to `main` and
 `claude/**` branches, and on every PR (installs `uv` + Rust toolchain with
 caching, 30-min timeout, publishes generated HTML docs as an artifact).
 `.github/workflows/docs.yml` builds and publishes the docs to GitHub Pages.

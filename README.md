@@ -67,7 +67,7 @@ uv run --script data/generate_data.py --clean --generate   # regenera do zero
 
 ## Pré-requisitos
 
-Para rodar o `./check_all.sh` (e o repositório em geral), a máquina precisa de:
+Para rodar o `./check-all.sh` (e o repositório em geral), a máquina precisa de:
 
 1. **[`uv`](https://docs.astral.sh/uv/)** — o único gerenciador a instalar
    para o lado Python. Ele resolve sozinho, na primeira execução, tudo o
@@ -80,13 +80,13 @@ Para rodar o `./check_all.sh` (e o repositório em geral), a máquina precisa de
    As crates (pyo3, arrow) são baixadas pelo cargo na primeira compilação.
 3. **Acesso à internet na primeira execução** — para o `uv` e o `cargo`
    baixarem dependências. Depois disso, apenas 3 testes do DuckDB (leitura de
-   buckets S3 públicos, exemplo 13) precisam de rede — `./check_all.sh
+   buckets S3 públicos, exemplo 13) precisam de rede — `./check-all.sh
    --no-network` os pula.
-4. **bash** — os scripts `check_all.sh`/`clean_all.sh` são shell scripts
+4. **bash** — os scripts `check-all.sh`/`clean-all.sh` são shell scripts
    (macOS e Linux funcionam direto; no Windows, use WSL ou Git Bash).
 5. **~2.7GB de disco livre** — dados fictícios gerados (~1.5GB em
    `data/raw` + `data/rich`), um `.venv` por projeto (5 projetos,
-   ~200-250MB cada) e o build Rust (~130MB). O `./clean_all.sh` recupera
+   ~200-250MB cada) e o build Rust (~130MB). O `./clean-all.sh` recupera
    esse espaço.
 
 Nada além disso: sem servidor de banco, sem Docker, sem credenciais — os
@@ -249,8 +249,8 @@ scripts standalone do `exemplos-rust-extension` e gera as documentações (docte
 e cargo doc):
 
 ```bash
-./check_all.sh                # completo (3 testes do DuckDB usam internet)
-./check_all.sh --no-network   # ambiente sem acesso à internet
+./check-all.sh                # completo (3 testes do DuckDB usam internet)
+./check-all.sh --no-network   # ambiente sem acesso à internet
 ```
 
 Qualquer falha interrompe o script; ao final, um "Tudo OK!" confirma que o
@@ -260,14 +260,14 @@ O inverso — remover tudo que foi gerado (dados parquet, documentações, build
 Rust, caches), voltando ao estado pós-clone:
 
 ```bash
-./clean_all.sh          # limpa artefatos gerados (mantém os .venv)
-./clean_all.sh --all    # também remove os .venv e uv.lock (estado pós-clone)
+./clean-all.sh          # limpa artefatos gerados (mantém os .venv)
+./clean-all.sh --all    # também remove os .venv e uv.lock (estado pós-clone)
 ```
 
 ### Integração contínua (GitHub Actions)
 
 O workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) roda esse
-mesmo `./check_all.sh` a cada push na `main` e em cada pull request (instalando
+mesmo `./check-all.sh` a cada push na `main` e em cada pull request (instalando
 `uv` e a toolchain Rust, com cache): testes das 5 suítes, todos os exemplos,
 os pipelines e a geração de documentação. O HTML gerado (pdoc + rustdoc) é
 publicado como artefato baixável da execução. O status aparece no badge no
@@ -284,7 +284,7 @@ ligando a documentação Python (`/python`) e a Rust (`/rust`).
 ## Por onde começar
 
 1. `uv run --script data/generate_data.py --generate` — obrigatório após clonar o
-   repositório, já que os parquet não são versionados (o `./check_all.sh`
+   repositório, já que os parquet não são versionados (o `./check-all.sh`
    acima já faz isso automaticamente).
 2. [`exemplos-pandas/`](exemplos-pandas) e [`exemplos-pyarrow/`](exemplos-pyarrow) — mesmos conceitos (seleção,
    limpeza, groupby, joins, pivot), comparando a API de alto nível do pandas
