@@ -56,9 +56,11 @@ jobs:
             etl_rust_ext ./run_etl.py ./run_contracts_parallel.py ./run_reorg_for_upstream.py \
             ./run_data_types.py ./run_nested_params.py ./docs_demo.py
 
+      # `uv run` faz o build script do pyo3-ffi usar o Python do venv isolado
+      # (>= 3.8) em vez do Python do sistema, que pode ser antigo demais.
       - name: Gerar documentação Rust (cargo doc)
         working-directory: exemplos-rust-extension
-        run: cargo doc --no-deps --document-private-items
+        run: uv run cargo doc --no-deps --document-private-items
 
       # Monta o site: página inicial na raiz, pdoc em /python, rustdoc em /rust.
       # .nojekyll evita qualquer processamento Jekyll de caminhos com underscore.

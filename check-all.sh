@@ -63,7 +63,10 @@ step 9/9 "Documentação: doctest do docs_demo, pdoc (docs/) e cargo doc (target
 (cd exemplos-rust-extension && uv run python -m doctest docs_demo.py -v > /dev/null)
 (cd exemplos-rust-extension && uv run pdoc --math --mermaid --docformat google --template-dir pdoc-templates --output-dir docs \
     etl_rust_ext ./run_etl.py ./run_contracts_parallel.py ./run_reorg_for_upstream.py ./run_data_types.py ./run_nested_params.py ./docs_demo.py)
-(cd exemplos-rust-extension && cargo doc --no-deps --document-private-items)
+# `cargo doc` compila o pyo3-ffi, cujo build script precisa de um interpretador
+# Python >= 3.8. Rodar sob `uv run` faz o pyo3 usar o Python do venv isolado
+# (via VIRTUAL_ENV) em vez do Python do sistema, que pode ser antigo demais.
+(cd exemplos-rust-extension && uv run cargo doc --no-deps --document-private-items)
 
 printf '\n\033[1;32mTudo OK!\033[0m Documentação em exemplos-rust-extension/docs/index.html '
 printf 'e exemplos-rust-extension/target/doc/_etl_rust_ext/index.html\n'
