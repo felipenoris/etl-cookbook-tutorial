@@ -76,7 +76,7 @@ Para rodar o `./check_all.sh` (e o repositório em geral), a máquina precisa de
    ferramentas de dev (`pytest`, `pdoc`). Não é preciso ter Python instalado
    nem ativar venv manualmente.
 2. **Toolchain Rust** ([rustup.rs](https://rustup.rs)) — `cargo`/`rustc`,
-   usados para compilar a extensão PyO3 (`rust-extension`) e gerar o rustdoc.
+   usados para compilar a extensão PyO3 (`exemplos-rust-extension`) e gerar o rustdoc.
    As crates (pyo3, arrow) são baixadas pelo cargo na primeira compilação.
 3. **Acesso à internet na primeira execução** — para o `uv` e o `cargo`
    baixarem dependências. Depois disso, apenas 3 testes do DuckDB (leitura de
@@ -136,7 +136,7 @@ Observações que os exemplos demonstram na prática:
   (Acero) **não aceita colunas aninhadas como payload** — projete/achate
   antes do join. No Rust, a escrita usa os builders do arrow-rs
   (`ListBuilder`, `MapBuilder`, `StructArray`) — ver `roundtrip_all_types`
-  em `rust-extension`, que exercita leitura e escrita dos 11 tipos.
+  em `exemplos-rust-extension`, que exercita leitura e escrita dos 11 tipos.
 - Onde ver cada camada: [`exemplos-pyarrow/examples/10`](exemplos-pyarrow/examples/10_data_types.py),
   [`exemplos-pandas/examples/09`](exemplos-pandas/examples/09_arrow_data_types.py),
   [`exemplos-DuckDB/examples/14`](exemplos-DuckDB/examples/14_data_types.py) e
@@ -189,7 +189,7 @@ Três siglas aparecem abaixo:
 ### Os cinco custos que explicam a tabela
 
 A [decomposição detalhada](exemplos-sqlalchemy-contract/README.md#por-que-o-orm-é-lento-os-cinco-custos)
-está no `sqlalchemy-contract`: (1) metadados por linha, (2) escrituração do
+está no `exemplos-sqlalchemy-contract`: (1) metadados por linha, (2) escrituração do
 ORM, (3) travessia de fronteira por linha, (4) execução interpretada e (5)
 alocação de heap por linha. Cada degrau da tabela elimina um subconjunto
 deles. O [estudo em Rust](exemplos-rust-extension/run_nested_params.py) mostra que
@@ -245,7 +245,7 @@ de 11 CPUs, dados em cache do SO.
 
 Acabou de clonar? Um único comando gera os dados, roda as 5 suítes de testes
 (cujos smoke tests executam **todos** os scripts de `examples/`), executa os
-scripts standalone do `rust-extension` e gera as documentações (doctest, pdoc
+scripts standalone do `exemplos-rust-extension` e gera as documentações (doctest, pdoc
 e cargo doc):
 
 ```bash

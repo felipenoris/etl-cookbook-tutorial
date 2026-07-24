@@ -53,7 +53,7 @@ jobs:
         run: |
           uv run pdoc --math --mermaid --docformat google --template-dir pdoc-templates \
             --output-dir docs \
-            etl_rust_ext ./run_etl.py ./run_contracts_parallel.py \
+            etl_rust_ext ./run_etl.py ./run_contracts_parallel.py ./run_reorg_for_upstream.py \
             ./run_data_types.py ./run_nested_params.py ./docs_demo.py
 
       - name: Gerar documentação Rust (cargo doc)
