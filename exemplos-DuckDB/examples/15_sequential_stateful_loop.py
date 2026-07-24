@@ -8,8 +8,8 @@ uma linha para a seguinte) — e por isso é o caso em que uma extensão nativa
 compensa. Aqui, o objetivo é o OPOSTO: exercitar a API de streaming do DuckDB
 no Python, mesmo sabendo que o laço linha a linha não performa bem.
 
-O padrão exercitado (o mesmo dos três exemplos irmãos em `../pandas` e
-`../pyarrow`):
+O padrão exercitado (o mesmo dos três exemplos irmãos em `../exemplos-pandas` e
+`../exemplos-pyarrow`):
 
 1. **entrada em streaming**: o DuckDB entrega o resultado em LOTES via
    `relation.to_arrow_reader(n)` — um `RecordBatch` por iteração, sem

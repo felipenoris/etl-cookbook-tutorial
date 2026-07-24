@@ -5,7 +5,7 @@ Conceitos:
   criar uma tabela derivada de uma computação qualquer.
 - Construção explícita de um `RecordBatch` com schema definido manualmente
   (útil quando se quer controlar tipos com precisão, ex.: antes de repassar
-  para uma extensão Rust, como na etapa `rust-extension/`).
+  para uma extensão Rust, como na etapa `exemplos-rust-extension/`).
 - UDF (função definida pelo usuário) em Python puro aplicada com list comprehension + `pa.array(...)` —
   mais lento que `pyarrow.compute`, mas às vezes é a única opção para lógica
   arbitrária que não existe como função vetorizada pronta.

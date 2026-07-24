@@ -7,7 +7,7 @@ fictícios em [`../data/raw`](../data/raw).
 ## Setup
 
 ```bash
-cd pyarrow
+cd exemplos-pyarrow
 uv sync
 ```
 
@@ -73,7 +73,7 @@ Dois detalhes que o exemplo 12 mede sobre os dados reais:
   coluna toda nula, `min`/`max` ficam ausentes, mas o `null_count` permanece.
 
 Isso vale para toda a stack Arrow: o **DuckDB** aplica os mesmos três mecanismos
-sobre os mesmos parquets (veja `../DuckDB`, exemplos 02 e 12).
+sobre os mesmos parquets (veja `../exemplos-DuckDB`, exemplos 02 e 12).
 
 ## Estratégia para equipes proficientes em pandas
 

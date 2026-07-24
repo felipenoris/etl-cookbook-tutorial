@@ -1,6 +1,6 @@
 """Exemplo 4 — ORM vs processamento em lote, em Python puro.
 
-O [`../rust-extension/run_nested_params.py`](../../rust-extension/run_nested_params.py)
+O [`../exemplos-rust-extension/run_nested_params.py`](../../exemplos-rust-extension/run_nested_params.py)
 mede o custo de materializar dados 1:N **em Rust**, onde os objetos são baratos
 e a penalidade fica em ~4x. Este exemplo faz a pergunta equivalente **em Python
 puro**, onde os objetos são caros — e a diferença muda de ordem de grandeza.
@@ -45,7 +45,7 @@ e cada degrau isola um custo diferente:
 | 4. Lote colunar (DuckDB) | ~0,04s | **~258x** | **4 e 5** — laço e alocação |
 
 Os números da coluna "custos" remetem à decomposição usada no
-`../rust-extension/run_nested_params.py` e no README deste projeto: (1)
+`../exemplos-rust-extension/run_nested_params.py` e no README deste projeto: (1)
 metadados por linha, (2) escrituração do ORM, (3) travessia de fronteira por
 linha/entidade, (4) execução interpretada, (5) alocação de heap por linha.
 
@@ -240,6 +240,6 @@ if __name__ == "__main__":
     for nome, tempo, _, _ in resultados:
         print(f"{nome:34s} {tempo:7.2f}s   ({t_lento / tempo:5.1f}x vs. o ORM lazy)")
     print(f"\nDo ORM ingênuo ao lote colunar: {t_lento / t_lote:.0f}x")
-    print("Compare com o mesmo estudo em Rust (rust-extension/run_nested_params.py),")
+    print("Compare com o mesmo estudo em Rust (exemplos-rust-extension/run_nested_params.py),")
     print("onde materializar por linha custa ~4x: em Python, cada linha vira um")
     print("objeto com refcount, GC e atributos instrumentados — a conta é outra.")

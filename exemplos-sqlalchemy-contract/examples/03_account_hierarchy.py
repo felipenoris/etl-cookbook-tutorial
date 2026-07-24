@@ -12,7 +12,7 @@ hierarquia — é resolvida com `WITH RECURSIVE` no DuckDB in-process:
    nível, raiz), e "conta X e descendentes" vira um JOIN comum;
 4. as agregações de valor somam DECIMAL(12,2) — exatas, sem float.
 
-Compare com `DuckDB/examples/09_advanced_sql_transforms.py`, que introduz a
+Compare com `exemplos-DuckDB/examples/09_advanced_sql_transforms.py`, que introduz a
 CTE recursiva; aqui ela opera o modelo real de arestas por hierarquia (com
 uma hierarquia alternativa provando por que o desenho suporta N visões).
 

@@ -3,17 +3,17 @@
 Este script fecha o ciclo dos exemplos das etapas anteriores do tutorial em um
 único ETL de ponta a ponta:
 
-1. **DuckDB** (`../DuckDB`) lê e junta `orders` + `customers` + `products` de
+1. **DuckDB** (`../exemplos-DuckDB`) lê e junta `orders` + `customers` + `products` de
    ``data/raw`` diretamente dos parquets particionados, com ``memory_limit``/
    ``temp_directory`` configurados para exercitar spill em disco, e devolve o
    resultado ordenado como uma única ``pyarrow.RecordBatch``.
-2. **pyarrow** (`../pyarrow`) faz uma pequena projeção/cast antes de repassar
+2. **pyarrow** (`../exemplos-pyarrow`) faz uma pequena projeção/cast antes de repassar
    o batch para a camada Rust.
 3. A extensão **Rust** (`etl_rust_ext`, ver ``src/lib.rs``) recebe esse
    ``RecordBatch`` via ``pyo3-arrow`` — sem copiar os buffers de dados — e
    calcula, num único loop sequencial, o gasto acumulado por cliente e um
    tier de fidelidade (algo lento em Python puro e trivial em Rust).
-4. **pandas** (`../pandas`) com backend Arrow resume o resultado final por
+4. **pandas** (`../exemplos-pandas`) com backend Arrow resume o resultado final por
    tier, para inspeção humana.
 5. O resultado enriquecido é gravado em ``data/rich/order_metrics/`` como
    parquet particionado por ``customer_tier``.
@@ -51,7 +51,7 @@ def extract_and_join_with_duckdb() -> pa.Table:
 
     Configura um teto de memória propositalmente apertado (``memory_limit``)
     com spill habilitado (``temp_directory``), igual ao exemplo
-    ``DuckDB/examples/04_memory_limit_and_spill.py``, para mostrar que o join
+    ``exemplos-DuckDB/examples/04_memory_limit_and_spill.py``, para mostrar que o join
     e o ``ORDER BY`` sobre as ~33.7M linhas de ``orders`` funcionam mesmo sem
     RAM suficiente para manter tudo em memória de uma vez.
 
@@ -115,7 +115,7 @@ def enrich_with_rust(batch: pa.RecordBatch) -> pa.Table:
 
 
 def summarize_with_pandas(table: pa.Table) -> pd.DataFrame:
-    """Resumo final com pandas usando backend Arrow (mesmo padrão de ``../pandas``)."""
+    """Resumo final com pandas usando backend Arrow (mesmo padrão de ``../exemplos-pandas``)."""
     df = table.to_pandas(types_mapper=pd.ArrowDtype)
     return (
         df.groupby("customer_tier")

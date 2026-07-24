@@ -11,7 +11,7 @@ Caminhos de saída (DuckDB -> Python):
   de troca preferido. (`.arrow()` devolve um `RecordBatchReader` streaming,
   melhor para resultados maiores que a RAM.)
 - `.df()` devolve pandas "clássico" (numpy). Para manter o DataFrame com
-  backend Arrow — o padrão deste tutorial, ver `../pandas` — o caminho é
+  backend Arrow — o padrão deste tutorial, ver `../exemplos-pandas` — o caminho é
   `to_arrow_table().to_pandas(types_mapper=pd.ArrowDtype)`.
 
 Caminho de entrada (Python -> DuckDB), o que mais surpreende quem vem de

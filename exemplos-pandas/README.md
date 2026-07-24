@@ -8,7 +8,7 @@ usando o **Arrow como backend** de armazenamento das colunas (`dtype_backend="py
 ## Setup
 
 ```bash
-cd pandas
+cd exemplos-pandas
 uv sync
 ```
 
@@ -40,7 +40,7 @@ jeito nativo de representar inteiros/nulos sem promover tudo para `float64`. Com
 `dtype_backend="pyarrow"`, as colunas passam a ser `ArrowDtype`, apoiadas
 diretamente em arrays Arrow — mais compactas, com suporte nativo a nulos em
 qualquer tipo, e compatíveis (sem cópia) com pyarrow/DuckDB, que são explorados
-nas pastas [`../pyarrow`](../pyarrow) e [`../DuckDB`](../DuckDB).
+nas pastas [`../exemplos-pyarrow`](../exemplos-pyarrow) e [`../exemplos-DuckDB`](../exemplos-DuckDB).
 
 ## Testes
 
@@ -60,4 +60,4 @@ chaves de join, comportamento das operações principais).
 - [API reference do pandas](https://pandas.pydata.org/docs/reference/index.html) — referência completa de todas as funções e métodos.
 - [PyArrow functionality](https://pandas.pydata.org/docs/user_guide/pyarrow.html) — capítulo do User Guide sobre o backend Arrow (`dtype_backend="pyarrow"` / `ArrowDtype`), o modo usado em todos os exemplos daqui.
 - [Cookbook do pandas](https://pandas.pydata.org/docs/user_guide/cookbook.html) — receitas curtas de casos práticos.
-- [pyarrow — documentação oficial](https://arrow.apache.org/docs/python/index.html) — útil para entender o que existe por baixo dos `ArrowDtype`; explorado a fundo na pasta [`../pyarrow`](../pyarrow).
+- [pyarrow — documentação oficial](https://arrow.apache.org/docs/python/index.html) — útil para entender o que existe por baixo dos `ArrowDtype`; explorado a fundo na pasta [`../exemplos-pyarrow`](../exemplos-pyarrow).

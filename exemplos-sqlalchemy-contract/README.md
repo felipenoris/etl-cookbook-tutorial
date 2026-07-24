@@ -31,7 +31,7 @@ RelacionamentoContaHierarquia, Lancamento) com três mudanças deliberadas:
 | `04_orm_vs_batch.py` | o gradiente ORM → lote em Python puro: lazy loading (N+1), eager loading, linhas brutas e agregação vetorizada no DuckDB |
 
 ```bash
-cd sqlalchemy-contract
+cd exemplos-sqlalchemy-contract
 uv sync
 uv run examples/01_models_as_contract.py
 uv run examples/02_orm_vs_columnar.py          # aceita [n_linhas], default 100000
@@ -60,7 +60,7 @@ vira objeto — são buffers Arrow do início ao fim.
 A lentidão do ORM não vem de "materializar objetos" em abstrato, mas de cinco
 custos distintos. Vale nomeá-los, porque cada estratégia do exemplo 04 elimina
 um subconjunto deles — e porque é o mesmo arcabouço usado no [estudo
-equivalente em Rust](../rust-extension/run_nested_params.py):
+equivalente em Rust](../exemplos-rust-extension/run_nested_params.py):
 
 | # | Custo do ORM | Onde aparece |
 | --- | --- | --- |
@@ -184,7 +184,7 @@ essencial.
 **2. Navegação de relacionamentos.** Perder `contrato.parametros` é real. Em
 compensação, ganha-se controle explícito sobre o custo: o lazy loading é
 notório por gerar N+1 queries silenciosas, enquanto o join explícito (ou a
-coluna `list<...>`, ver [`../rust-extension/run_nested_params.py`](../rust-extension/run_nested_params.py))
+coluna `list<...>`, ver [`../exemplos-rust-extension/run_nested_params.py`](../exemplos-rust-extension/run_nested_params.py))
 deixa o custo visível no código.
 
 ### O custo que não é da ferramenta
@@ -227,5 +227,5 @@ contas sem lançamentos).
 
 - [SQLAlchemy 2.0 — ORM declarativo](https://docs.sqlalchemy.org/en/20/orm/declarative_mapping.html) — `Mapped`/`mapped_column`, incluindo o parâmetro `comment=`.
 - [SQLAlchemy — Core vs ORM](https://docs.sqlalchemy.org/en/20/tutorial/dbapi_transactions.html) — a distinção que o exemplo 02 mede.
-- [DuckDB — WITH RECURSIVE](https://duckdb.org/docs/stable/sql/query_syntax/with) — a CTE recursiva do exemplo 03 (introduzida em [`../DuckDB/examples/09`](../DuckDB/examples/09_advanced_sql_transforms.py)).
+- [DuckDB — WITH RECURSIVE](https://duckdb.org/docs/stable/sql/query_syntax/with) — a CTE recursiva do exemplo 03 (introduzida em [`../exemplos-DuckDB/examples/09`](../exemplos-DuckDB/examples/09_advanced_sql_transforms.py)).
 - [Redshift — COMMENT](https://docs.aws.amazon.com/redshift/latest/dg/r_COMMENT.html) — o comando que a projeção `redshift_ddl_for` emite.
