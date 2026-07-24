@@ -17,6 +17,7 @@ rust-extension/
     __init__.py
   run_etl.py               # pipeline de ETL completo (DuckDB -> pyarrow -> Rust -> pandas -> parquet)
   run_contracts_parallel.py # multithreading: lotes submetidos serialmente, processados em paralelo
+  run_reorg_for_upstream.py # etapa final: reordena/particiona a saída paralela (desordenada) p/ o upstream
   run_data_types.py        # tipos Arrow (struct/list/map/decimal/binary...) manipulados no Rust
   run_nested_params.py     # 1:N no Rust: materializar vs emprestar fatias (a discussão "isso vira um ORM?")
   docs_demo.py             # demonstração dos recursos do pdoc (math, mermaid, include, markdown)
@@ -152,6 +153,41 @@ Topologia: `submit_batch` → fila limitada → N workers → fila de resultados
 em processamento. No exemplo, 1,6M de contratos são processados com uma fila
 de apenas 3 lotes e gravados em parquet — a base inteira nunca fica na RAM.
 
+## Reorganização antes do upstream: reordenar a saída do paralelo
+
+```bash
+uv run run_reorg_for_upstream.py
+```
+
+O processamento paralelo é *embaraçosamente paralelo* de propósito, e o preço
+disso é que **a saída não sai ordenada**: os workers terminam fora de ordem, e a
+coluna calculada (`receita_projetada`) não tem relação com a ordem de leitura.
+Para subir esse resultado a um *upstream* (ex.: Redshift) sem degradar as
+consultas futuras, o dado precisa entrar **agrupado (clustered) pela sort key** —
+é o que faz o *zone map* por bloco (e a estatística `min`/`max` por *row group* do
+parquet) conseguir **pular** blocos (o mecanismo medido no exemplo 12 do pyarrow).
+
+Este script fecha o pipeline com a **etapa de reorganização**, num único
+`COPY ... ORDER BY` do DuckDB que:
+
+1. **ordena** pela sort key (`receita_projetada`), com `id_contrato` como
+   **desempate** — sem ele, ordenar um dado embaralhado não seria reproduzível;
+2. **particiona** por faixa de receita — cada partição vira a **unidade de
+   recarga idempotente** que o upstream carrega com um `COPY`;
+3. controla o `ROW_GROUP_SIZE` para o `min`/`max` ficar granular.
+
+É uma **barreira** (uma ordenação global precisa ver todas as linhas antes de
+emitir a primeira), então roda *fora* do pool de streaming — mas continua
+*memory-bounded*, porque o sort do DuckDB é **externo** e derrama para
+`temp_directory` sob pressão (o spill dos exemplos 04 e 17 do DuckDB). Particionar
+pela sort key encolhe a barreira: o "sort global" vira "sort local por partição".
+
+O script mede os dois lados sobre 600 mil contratos: a desordem que sai do
+paralelo (≈50% de descidas na sort key, 0 *row groups* puláveis) e o resultado da
+reorganização (ordem global determinística, ~80% dos *row groups* puláveis),
+provando que nenhuma linha se perde. É a etapa acrescentada ao diagrama "Fluxo de
+dados do ETL ideal" da [documentação Python](docs/index.html).
+
 ## Dados 1:N no Rust: materializar ou emprestar?
 
 ```bash
@@ -202,7 +238,8 @@ uv run pdoc --math --mermaid --docformat google --output-dir docs etl_rust_ext .
 ```
 
 Gera HTML estático em `docs/`, navegável abrindo `docs/index.html` direto do
-disco no browser (sem precisar de servidor).
+disco no browser (sem precisar de servidor). (No `check_all.sh` a lista de
+módulos inclui também `./run_reorg_for_upstream.py`.)
 
 As flags e o módulo extra:
 
@@ -285,6 +322,10 @@ profundidade 1 sem deadlock, erros de `finish`/caminho inválido).
 mútua, sublistas vazias e erros de tipo aninhado).
 `tests/test_run_etl.py` testa cada etapa do pipeline isoladamente e, no teste
 marcado `slow`, roda o ETL inteiro gravando num diretório temporário.
+`tests/test_reorg_for_upstream.py` cobre a etapa de reorganização
+(`reorganizar_para_upstream`) sobre uma entrada pequena e embaralhada: partição
+por faixa, conservação das linhas, ordem total determinística (com desempate) e a
+restauração do predicate pushdown (row groups puláveis antes × depois).
 
 ## Referências
 

@@ -34,9 +34,10 @@ Rust, gerada por `cargo doc`, fica no mesmo site (veja os links no fim da págin
 
 O pipeline ideal deste tutorial processa bases **maiores que a RAM** mantendo o uso de
 memória **constante**: lê em *streaming*, transforma num pool fixo de threads no Rust
-(com o GIL — Global Interpreter Lock — solto) e grava o resultado em disco
-incrementalmente. É o desenho do `BoundedRevenueProjector` (detalhado em
-`run_contracts_parallel`), aqui visto como Extract → Transform → Load:
+(com o GIL — Global Interpreter Lock — solto), grava o resultado em disco
+incrementalmente e, ao final, **reorganiza** a saída para subir ao *upstream*. O núcleo
+é o desenho do `BoundedRevenueProjector` (detalhado em `run_contracts_parallel`), aqui
+visto como Extract → Transform → Load → Reorganização:
 
 ```mermaid
 flowchart TB
@@ -55,13 +56,17 @@ flowchart TB
         RQ(["fila de resultados\nLIMITADA"])
     end
     WR["Load\nthread escritora\nArrowWriter (incremental)"]
-    DST[("data/rich\nparquet em DISCO\ncresce fora da RAM")]
+    DST[("data/rich\nparquet em DISCO\n(desordenado: ordem = fim dos workers)")]
+    REORG["Reorganização (BARREIRA, fora do MEM)\nsort pela sort key + partição/coalesce\nDuckDB COPY ... ORDER BY\nsort externo memory-bounded (spill)"]
+    UP[("upstream\nRedshift\nCOPY do parquet já ordenado")]
     SRC -->|"1 lote por vez"| RD
     RD --> Q
     Q --> POOL
     POOL --> RQ
     RQ --> WR
     WR -->|"escreve 1 lote por vez"| DST
+    DST -->|"lê tudo, ordena, particiona"| REORG
+    REORG -->|"1 partição por vez (unidade de recarga)"| UP
     Q -. "fila cheia → produtor espera (backpressure)" .-> RD
 ```
 
@@ -78,6 +83,25 @@ Só o retângulo **MEM** fica residente na RAM, e seu tamanho é fixo
 O contraste com a versão *sem* limite de memória (`ParallelRevenueProjector`, que acumula
 lotes em voo) está documentado em `run_contracts_parallel`.
 
+### A etapa de Reorganização (pré-upstream)
+
+O paralelismo tem um efeito colateral: como os *workers* terminam fora de ordem, o parquet
+que sai do Load fica **embaralhado pela sort key do destino**. Isso degrada a consulta no
+*upstream* — tanto o *zone map* por bloco do Redshift quanto a estatística `min`/`max` por
+*row group* do parquet só **pulam** blocos quando valores próximos estão fisicamente
+próximos. Por isso o pipeline fecha com uma etapa de **reorganização** (`run_reorg_for_upstream`):
+ordena pela sort key (com a chave natural como desempate, para a saída ser reproduzível),
+particiona por faixa — cada partição é a **unidade de recarga idempotente** — e ajusta o
+tamanho do *row group*.
+
+Essa etapa é uma **barreira**, por isso aparece **fora do retângulo MEM**: uma ordenação
+global precisa ter visto todas as linhas antes de emitir a primeira, então é um ponto de
+materialização disco→disco, não faz parte do *pool* de *streaming*. Ela continua
+*memory-bounded* porque o `COPY ... ORDER BY` do DuckDB faz **sort externo**, derramando
+*runs* para disco quando estoura o `memory_limit` (o mesmo spill dos exemplos 04 e 17 do
+DuckDB) — um *k-way merge* de runs ordenados. Particionar pela sort key encolhe a barreira:
+o "sort global" vira "sort local por partição", paralelizável de novo.
+
 ## Módulos documentados
 
 - `etl_rust_ext` — a API da extensão compilada, vista do lado Python: enriquecimento de
@@ -86,6 +110,9 @@ lotes em voo) está documentado em `run_contracts_parallel`.
   parquet.
 - `run_contracts_parallel` — projeção em paralelo de contratos com a extensão Rust, e as
   duas estratégias de memória (com e sem limite) que o diagrama acima resume.
+- `run_reorg_for_upstream` — a etapa de Reorganização do diagrama: pega a saída
+  (embaralhada) do estágio paralelo e a ordena/particiona pela sort key, memory-bounded
+  via spill, deixando-a pronta para o `COPY` do Redshift.
 - `run_data_types` — roundtrip de tipos Arrow entre Python e Rust (inteiros, decimais,
   datas, aninhados).
 - `run_nested_params` — materialização 1:N sobre `ListArray` (um contrato com N
