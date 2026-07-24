@@ -679,8 +679,8 @@ fn downcast_column<'a, T: 'static>(
 ///
 /// Entrada (schema de `data/raw/customers`): `customer_id` (int64),
 /// `is_active` (**bool**), `signup_ts` (**timestamp µs**), `address`
-/// (**struct**<street,city,zip>), `tags` (**list**<string>) e `preferences`
-/// (**map**<string,string>).
+/// (**struct**\<street,city,zip\>), `tags` (**list**\<string\>) e `preferences`
+/// (**map**\<string,string\>).
 ///
 /// O argumento `reference_date` chega do Python como **`datetime.date`** e
 /// vira **`chrono::NaiveDate`** automaticamente — a feature opcional `chrono`
@@ -899,19 +899,19 @@ fn compute_product_margin(
 /// downcast zero-copy; escrita Rust -> Python via arrays/builders do
 /// arrow-rs):
 ///
-/// | coluna      | tipo Arrow         | transformação no Rust           |
-/// |-------------|--------------------|---------------------------------|
-/// | `texto`     | utf8               | uppercase                       |
-/// | `inteiro`   | int64              | + 1                             |
-/// | `flutuante` | float64            | * 2                             |
-/// | `logico`    | bool               | negado                          |
-/// | `data`      | date32             | + 30 dias (`chrono::NaiveDate`) |
-/// | `instante`  | timestamp[us]      | + 1 hora                        |
-/// | `valor`     | decimal128(12,2)   | + 10% (`rust_decimal`, 2 casas) |
-/// | `lista`     | list<utf8>         | cada elemento em uppercase      |
-/// | `estrutura` | struct<nome,quantidade> | nome uppercase, quantidade * 2 |
-/// | `mapa`      | map<utf8,utf8>     | valores em uppercase            |
-/// | `binario`   | binary             | bytes revertidos                |
+/// | coluna      | tipo Arrow                | transformação no Rust           |
+/// |-------------|---------------------------|---------------------------------|
+/// | `texto`     | `utf8`                    | uppercase                       |
+/// | `inteiro`   | `int64`                   | + 1                             |
+/// | `flutuante` | `float64`                 | * 2                             |
+/// | `logico`    | `bool`                    | negado                          |
+/// | `data`      | `date32`                  | + 30 dias (`chrono::NaiveDate`) |
+/// | `instante`  | `timestamp[us]`           | + 1 hora                        |
+/// | `valor`     | `decimal128(12,2)`        | + 10% (`rust_decimal`, 2 casas) |
+/// | `lista`     | `list<utf8>`              | cada elemento em uppercase      |
+/// | `estrutura` | `struct<nome,quantidade>` | nome uppercase, quantidade * 2  |
+/// | `mapa`      | `map<utf8,utf8>`          | valores em uppercase            |
+/// | `binario`   | `binary`                  | bytes revertidos                |
 ///
 /// Os aninhados usam os *builders* do arrow-rs na escrita (`ListBuilder`,
 /// `MapBuilder`, `StructArray`) — o caminho idiomático para construir arrays
