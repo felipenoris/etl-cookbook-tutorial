@@ -9,8 +9,8 @@
 # com erro.
 #
 # Uso:
-#   ./check_all.sh                # verificação completa (3 testes usam internet)
-#   ./check_all.sh --no-network   # pula os testes que exigem internet
+#   ./check-all.sh                # verificação completa (3 testes usam internet)
+#   ./check-all.sh --no-network   # pula os testes que exigem internet
 #
 # Pré-requisitos: uv (https://docs.astral.sh/uv/) e toolchain Rust/cargo
 # (https://rustup.rs) — o resto (Python, dependências, maturin) o uv resolve.

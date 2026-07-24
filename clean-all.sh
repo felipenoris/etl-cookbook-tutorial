@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Limpeza dos artefatos gerados — o inverso do ./check_all.sh.
+# Limpeza dos artefatos gerados — o inverso do ./check-all.sh.
 #
 # Remove tudo que é produzido localmente (dados parquet, documentações, build
 # Rust, caches de teste), devolvendo o repositório ao estado pós-clone.
-# Nada versionado no git é tocado. Restaure tudo com ./check_all.sh.
+# Nada versionado no git é tocado. Restaure tudo com ./check-all.sh.
 #
 # Uso:
-#   ./clean_all.sh          # limpa artefatos gerados (mantém os .venv)
-#   ./clean_all.sh --all    # também remove os .venv (próximo uv run re-resolve)
+#   ./clean-all.sh          # limpa artefatos gerados (mantém os .venv)
+#   ./clean-all.sh --all    # também remove os .venv (próximo uv run re-resolve)
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -52,4 +52,4 @@ if $DEEP; then
     echo "removidos .venv + uv.lock + Cargo.lock (o próximo build re-resolve tudo)"
 fi
 
-printf '\n\033[1;32mLimpo!\033[0m Restaure tudo com ./check_all.sh\n'
+printf '\n\033[1;32mLimpo!\033[0m Restaure tudo com ./check-all.sh\n'

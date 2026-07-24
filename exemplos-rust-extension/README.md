@@ -238,7 +238,7 @@ uv run pdoc --math --mermaid --docformat google --output-dir docs etl_rust_ext .
 ```
 
 Gera HTML estático em `docs/`, navegável abrindo `docs/index.html` direto do
-disco no browser (sem precisar de servidor). (No `check_all.sh` a lista de
+disco no browser (sem precisar de servidor). (No `check-all.sh` a lista de
 módulos inclui também `./run_reorg_for_upstream.py`.)
 
 As flags e o módulo extra:

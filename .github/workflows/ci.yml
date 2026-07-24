@@ -33,7 +33,7 @@ jobs:
           enable-cache: true
 
       # Toolchain Rust para compilar a extensão PyO3 (via maturin) e gerar o
-      # rustdoc no passo de documentação do check_all.sh.
+      # rustdoc no passo de documentação do check-all.sh.
       - name: Instalar toolchain Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -43,7 +43,7 @@ jobs:
         with:
           workspaces: exemplos-rust-extension
 
-      # check_all.sh faz tudo em sequência: gera os dados fictícios, roda as 5
+      # check-all.sh faz tudo em sequência: gera os dados fictícios, roda as 5
       # suítes pytest (cujos smoke tests executam TODOS os scripts de examples/),
       # executa os scripts standalone do exemplos-rust-extension e gera as documentações
       # (doctest + pdoc + cargo doc). Qualquer falha derruba o job.
@@ -51,9 +51,9 @@ jobs:
       # Os runners do GitHub têm internet, então rodamos a suíte COMPLETA,
       # incluindo os 3 testes do DuckDB que leem buckets S3 públicos (exemplo
       # 13). Se esses acessos externos causarem instabilidade, troque por
-      # `./check_all.sh --no-network`.
+      # `./check-all.sh --no-network`.
       - name: Rodar verificação completa
-        run: ./check_all.sh
+        run: ./check-all.sh
 
       # Publica o HTML gerado (pdoc + rustdoc) como artefato baixável da
       # execução — útil para revisar a documentação sem rodar nada localmente.
