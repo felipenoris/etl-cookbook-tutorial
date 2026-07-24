@@ -25,10 +25,12 @@ manter as partições calibradas):
 - products: decimal128(12,2) (`unit_cost`, sempre 2 casas decimais) e binary
   (`sku`, 8 bytes) — além de string, int64 e float64.
 
-Uso:
-    uv run data/generate_data.py --generate           # gera as bases em data/raw
-    uv run data/generate_data.py --clean              # remove os parquet de raw/ e rich/
-    uv run data/generate_data.py --clean --generate   # regenera do zero
+Uso (o ``--script`` força o uv a resolver o ambiente isolado declarado nos
+metadados PEP 723 acima, ignorando qualquer venv ativo ou projeto ao redor):
+
+    uv run --script data/generate_data.py --generate           # gera as bases em data/raw
+    uv run --script data/generate_data.py --clean              # remove os parquet de raw/ e rich/
+    uv run --script data/generate_data.py --clean --generate   # regenera do zero
 """
 
 from __future__ import annotations

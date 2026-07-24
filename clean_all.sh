@@ -23,7 +23,7 @@ fi
 step() { printf '\n\033[1m==> [%s] %s\033[0m\n' "$1" "$2"; }
 
 step 1/5 "Dados parquet (data/raw e data/rich)"
-uv run data/generate_data.py --clean
+uv run --script data/generate_data.py --clean
 
 step 2/5 "Documentação gerada (rust-extension/docs)"
 rm -rf rust-extension/docs

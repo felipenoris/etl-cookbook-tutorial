@@ -60,9 +60,9 @@ Os arquivos parquet não são versionados no git (ver `.gitignore`). Para gerar
 (ou regenerar) os dados:
 
 ```bash
-uv run data/generate_data.py --generate           # gera as bases em data/raw
-uv run data/generate_data.py --clean              # remove os parquet de raw/ e rich/
-uv run data/generate_data.py --clean --generate   # regenera do zero
+uv run --script data/generate_data.py --generate           # gera as bases em data/raw
+uv run --script data/generate_data.py --clean              # remove os parquet de raw/ e rich/
+uv run --script data/generate_data.py --clean --generate   # regenera do zero
 ```
 
 ## Pré-requisitos
@@ -283,7 +283,7 @@ ligando a documentação Python (`/python`) e a Rust (`/rust`).
 
 ## Por onde começar
 
-1. `uv run data/generate_data.py --generate` — obrigatório após clonar o
+1. `uv run --script data/generate_data.py --generate` — obrigatório após clonar o
    repositório, já que os parquet não são versionados (o `./check_all.sh`
    acima já faz isso automaticamente).
 2. [`pandas/`](pandas) e [`pyarrow/`](pyarrow) — mesmos conceitos (seleção,
