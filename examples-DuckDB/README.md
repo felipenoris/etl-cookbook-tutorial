@@ -6,7 +6,7 @@ DuckDB sobre os dados fictícios em [`../data/raw`](../data/raw).
 ## Setup
 
 ```bash
-cd exemplos-DuckDB
+cd examples-DuckDB
 uv sync
 ```
 

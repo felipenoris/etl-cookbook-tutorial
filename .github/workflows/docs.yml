@@ -29,7 +29,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # uv baixa o Python do exemplos-rust-extension e, no primeiro `uv run`, compila a
+      # uv baixa o Python do examples-rust-extension e, no primeiro `uv run`, compila a
       # extensão via maturin — necessário porque o pdoc importa `etl_rust_ext`.
       - name: Instalar uv
         uses: astral-sh/setup-uv@v5
@@ -43,13 +43,13 @@ jobs:
       - name: Cache do build Rust
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: exemplos-rust-extension
+          workspaces: examples-rust-extension
 
       # pdoc importa os módulos para introspecção; nenhum deles lê data/raw em
       # tempo de import (o pipeline fica sob `if __name__ == "__main__"`), então
       # NÃO é preciso gerar os dados fictícios aqui.
       - name: Gerar documentação Python (pdoc)
-        working-directory: exemplos-rust-extension
+        working-directory: examples-rust-extension
         run: |
           uv run pdoc --math --mermaid --docformat google --template-dir pdoc-templates \
             --output-dir docs \
@@ -59,7 +59,7 @@ jobs:
       # `uv run` faz o build script do pyo3-ffi usar o Python do venv isolado
       # (>= 3.8) em vez do Python do sistema, que pode ser antigo demais.
       - name: Gerar documentação Rust (cargo doc)
-        working-directory: exemplos-rust-extension
+        working-directory: examples-rust-extension
         run: uv run cargo doc --no-deps --document-private-items
 
       # Monta o site: página inicial na raiz, pdoc em /python, rustdoc em /rust.
@@ -67,8 +67,8 @@ jobs:
       - name: Montar site (_site/)
         run: |
           mkdir -p _site/python _site/rust
-          cp -r exemplos-rust-extension/docs/. _site/python/
-          cp -r exemplos-rust-extension/target/doc/. _site/rust/
+          cp -r examples-rust-extension/docs/. _site/python/
+          cp -r examples-rust-extension/target/doc/. _site/rust/
           cp .github/pages/index.html _site/index.html
           touch _site/.nojekyll
 

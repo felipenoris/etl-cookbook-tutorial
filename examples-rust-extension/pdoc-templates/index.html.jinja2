@@ -167,10 +167,10 @@ Observações que os exemplos demonstram na prática:
   antes do join. No Rust, a escrita usa os builders do arrow-rs
   (`ListBuilder`, `MapBuilder`, `StructArray`) — ver `roundtrip_all_types`
   em `etl_rust_ext`, que exercita leitura e escrita dos 11 tipos.
-- Onde ver cada camada: [`exemplos-pyarrow/examples/10`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-pyarrow/examples/10_data_types.py),
-  [`exemplos-pandas/examples/09`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-pandas/examples/09_arrow_data_types.py),
-  [`exemplos-DuckDB/examples/14`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-DuckDB/examples/14_data_types.py) e
-  [`exemplos-rust-extension/run_data_types.py`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-rust-extension/run_data_types.py).
+- Onde ver cada camada: [`examples-pyarrow/examples/10`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-pyarrow/examples/10_data_types.py),
+  [`examples-pandas/examples/09`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-pandas/examples/09_arrow_data_types.py),
+  [`examples-DuckDB/examples/14`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-DuckDB/examples/14_data_types.py) e
+  [`examples-rust-extension/run_data_types.py`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-rust-extension/run_data_types.py).
 
 ## Performance: comparando as abordagens
 
@@ -193,36 +193,36 @@ Três siglas aparecem abaixo:
 - **UDF** (*User-Defined Function*) — função escrita por você e registrada no
   motor SQL para ser chamada de dentro de uma consulta; no DuckDB, pode ser em
   Python, injetando lógica que o SQL não expressa nativamente (ver
-  [`exemplos-DuckDB/10`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-DuckDB/examples/10_macros_and_python_udfs.py)).
+  [`examples-DuckDB/10`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-DuckDB/examples/10_macros_and_python_udfs.py)).
 - **N+1** — a armadilha do ORM em que carregar N registros relacionados dispara
   uma query inicial *mais uma query por registro* (1 + N idas ao banco), em vez
-  de trazer tudo de uma vez (ver [`exemplos-sqlalchemy-contract/04`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-sqlalchemy-contract/examples/04_orm_vs_batch.py)).
+  de trazer tudo de uma vez (ver [`examples-sqlalchemy-contract/04`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-sqlalchemy-contract/examples/04_orm_vs_batch.py)).
 - **GIL** (*Global Interpreter Lock*) — o mecanismo do CPython que permite só
   uma thread executar bytecode Python por vez; código Rust nativo pode
-  liberá-lo e assim rodar em paralelo de verdade (ver [`exemplos-rust-extension`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-rust-extension/README.md)).
+  liberá-lo e assim rodar em paralelo de verdade (ver [`examples-rust-extension`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-rust-extension/README.md)).
 
 | Abordagem | Vazão medida | Exemplo | Vantagens | Desvantagens |
 | --- | --- | --- | --- | --- |
-| **ORM com lazy loading** (N+1) | **~20k linhas/s** | [`exemplos-sqlalchemy-contract/04`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-sqlalchemy-contract/examples/04_orm_vs_batch.py) | a mais produtiva de escrever; navegação natural | N+1 silencioso; paga os 5 custos do ORM |
-| **ORM com eager loading** | **~80k linhas/s** | [`exemplos-sqlalchemy-contract/04`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-sqlalchemy-contract/examples/04_orm_vs_batch.py) | elimina o N+1 mantendo a ergonomia | 1 objeto Python por linha (GC, refcount) |
-| **INSERT via ORM** (escrita) | **~50k linhas/s** | [`exemplos-sqlalchemy-contract/02`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-sqlalchemy-contract/examples/02_orm_vs_columnar.py) | unit of work cuida de tudo | inviável para carga massiva |
-| **SQLAlchemy Core** (executemany) | **~320k linhas/s** | [`exemplos-sqlalchemy-contract/02`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-sqlalchemy-contract/examples/02_orm_vs_columnar.py) | sem objetos ORM; ainda é SQL portável | continua orientado a linha |
-| **Linhas brutas + laço Python** | **~670k linhas/s** ¹ | [`exemplos-sqlalchemy-contract/04`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-sqlalchemy-contract/examples/04_orm_vs_batch.py) | simples; sem dependência extra | limitado pelo interpretador *e pela carga por linha* |
-| **UDF Python no DuckDB** | **~10-16M linhas/s** ¹ | [`exemplos-DuckDB/10`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-DuckDB/examples/10_macros_and_python_udfs.py) | lógica Python arbitrária dentro do SQL | **24-39x mais lento que o SQL equivalente** (medido com controle) |
-| **SQL colunar puro** (DuckDB) | **~300-650M linhas/s** | [`exemplos-DuckDB/03`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-DuckDB/examples/03_joins_and_aggregations.py), [`exemplos-DuckDB/12`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-DuckDB/examples/12_performance_without_indexes.py) | vetorizado e paralelo; sem código por linha | só o que é expressável em SQL |
-| **Escrita colunar** (Arrow→parquet) | **~4.3M linhas/s** | [`exemplos-sqlalchemy-contract/02`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-sqlalchemy-contract/examples/02_orm_vs_columnar.py) | ~87x o INSERT do ORM | destino é arquivo, não tabela transacional |
-| **Rust serial** (pyo3-arrow) | **~2.2M contratos/s** | [`exemplos-rust-extension`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-rust-extension/run_contracts_parallel.py) | cálculo com estado, impossível de vetorizar | exige toolchain Rust |
-| **Rust multithread** | **~12M contratos/s** | [`exemplos-rust-extension`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-rust-extension/run_contracts_parallel.py) | ~5,5x sobre o serial (11 CPUs), fora do GIL | complexidade de concorrência |
-| **Rust, fatias emprestadas** | **~55M contratos/s** | [`exemplos-rust-extension/run_nested_params.py`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-rust-extension/run_nested_params.py) | zero alocação/cópia sobre `ListArray` | exige pensar em lifetimes |
-| **Pipeline completo de ETL** | **~4M linhas/s** | [`exemplos-rust-extension/run_etl.py`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-rust-extension/run_etl.py) | 33,7M linhas em ~8s: join+sort+Rust+escrita | — |
+| **ORM com lazy loading** (N+1) | **~20k linhas/s** | [`examples-sqlalchemy-contract/04`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-sqlalchemy-contract/examples/04_orm_vs_batch.py) | a mais produtiva de escrever; navegação natural | N+1 silencioso; paga os 5 custos do ORM |
+| **ORM com eager loading** | **~80k linhas/s** | [`examples-sqlalchemy-contract/04`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-sqlalchemy-contract/examples/04_orm_vs_batch.py) | elimina o N+1 mantendo a ergonomia | 1 objeto Python por linha (GC, refcount) |
+| **INSERT via ORM** (escrita) | **~50k linhas/s** | [`examples-sqlalchemy-contract/02`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-sqlalchemy-contract/examples/02_orm_vs_columnar.py) | unit of work cuida de tudo | inviável para carga massiva |
+| **SQLAlchemy Core** (executemany) | **~320k linhas/s** | [`examples-sqlalchemy-contract/02`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-sqlalchemy-contract/examples/02_orm_vs_columnar.py) | sem objetos ORM; ainda é SQL portável | continua orientado a linha |
+| **Linhas brutas + laço Python** | **~670k linhas/s** ¹ | [`examples-sqlalchemy-contract/04`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-sqlalchemy-contract/examples/04_orm_vs_batch.py) | simples; sem dependência extra | limitado pelo interpretador *e pela carga por linha* |
+| **UDF Python no DuckDB** | **~10-16M linhas/s** ¹ | [`examples-DuckDB/10`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-DuckDB/examples/10_macros_and_python_udfs.py) | lógica Python arbitrária dentro do SQL | **24-39x mais lento que o SQL equivalente** (medido com controle) |
+| **SQL colunar puro** (DuckDB) | **~300-650M linhas/s** | [`examples-DuckDB/03`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-DuckDB/examples/03_joins_and_aggregations.py), [`examples-DuckDB/12`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-DuckDB/examples/12_performance_without_indexes.py) | vetorizado e paralelo; sem código por linha | só o que é expressável em SQL |
+| **Escrita colunar** (Arrow→parquet) | **~4.3M linhas/s** | [`examples-sqlalchemy-contract/02`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-sqlalchemy-contract/examples/02_orm_vs_columnar.py) | ~87x o INSERT do ORM | destino é arquivo, não tabela transacional |
+| **Rust serial** (pyo3-arrow) | **~2.2M contratos/s** | [`examples-rust-extension`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-rust-extension/run_contracts_parallel.py) | cálculo com estado, impossível de vetorizar | exige toolchain Rust |
+| **Rust multithread** | **~12M contratos/s** | [`examples-rust-extension`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-rust-extension/run_contracts_parallel.py) | ~5,5x sobre o serial (11 CPUs), fora do GIL | complexidade de concorrência |
+| **Rust, fatias emprestadas** | **~55M contratos/s** | [`examples-rust-extension/run_nested_params.py`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-rust-extension/run_nested_params.py) | zero alocação/cópia sobre `ListArray` | exige pensar em lifetimes |
+| **Pipeline completo de ETL** | **~4M linhas/s** | [`examples-rust-extension/run_etl.py`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-rust-extension/run_etl.py) | 33,7M linhas em ~8s: join+sort+Rust+escrita | — |
 
 ### Os cinco custos que explicam a tabela
 
-A [decomposição detalhada](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-sqlalchemy-contract/README.md#por-que-o-orm-é-lento-os-cinco-custos)
-está no `exemplos-sqlalchemy-contract`: (1) metadados por linha, (2) escrituração do
+A [decomposição detalhada](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-sqlalchemy-contract/README.md#por-que-o-orm-é-lento-os-cinco-custos)
+está no `examples-sqlalchemy-contract`: (1) metadados por linha, (2) escrituração do
 ORM, (3) travessia de fronteira por linha, (4) execução interpretada e (5)
 alocação de heap por linha. Cada degrau da tabela elimina um subconjunto
-deles. O [estudo em Rust](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-rust-extension/run_nested_params.py) mostra que
+deles. O [estudo em Rust](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-rust-extension/run_nested_params.py) mostra que
 **quatro dos cinco desaparecem só por sair do Python** — por isso a mesma
 lição ("não processe linha a linha") custa ~4x lá e ~258x aqui.
 
@@ -266,7 +266,7 @@ de 11 CPUs, dados em cache do SO.
 - **UDF Python** quando a lógica não couber em SQL mas o volume for moderado.
 - **Rust** quando houver cálculo sequencial com estado por entidade (projeções
   financeiras, simulações) sobre volume alto — e aí use
-  [pool com backpressure](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/exemplos-rust-extension/README.md) para manter memória
+  [pool com backpressure](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-rust-extension/README.md) para manter memória
   constante.
 - **ORM** apenas fora do caminho de dados: schema/contrato e consultas
   pontuais.

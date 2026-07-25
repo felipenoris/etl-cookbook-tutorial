@@ -33,19 +33,19 @@ etl-cookbook-tutorial/
   data/
     generate_data.py     # generates the fictional dataset (standalone PEP 723 script)
     raw/                 # input: partitioned parquet (customers, products, orders) — gitignored
-    rich/                # ETL output (written by exemplos-rust-extension/run_etl.py) — gitignored
-  exemplos-pandas/                # pandas API with the Arrow backend
-  exemplos-pyarrow/               # native pyarrow API
-  exemplos-DuckDB/                # in-memory SQL over parquet, with configurable spill
-  exemplos-rust-extension/        # Rust extension (PyO3 + pyo3-arrow) + full ETL + docs (pdoc/rustdoc)
-  exemplos-sqlalchemy-contract/   # ORM-pattern migration: models as schema contract, ORM vs columnar
+    rich/                # ETL output (written by examples-rust-extension/run_etl.py) — gitignored
+  examples-pandas/                # pandas API with the Arrow backend
+  examples-pyarrow/               # native pyarrow API
+  examples-DuckDB/                # in-memory SQL over parquet, with configurable spill
+  examples-rust-extension/        # Rust extension (PyO3 + pyo3-arrow) + full ETL + docs (pdoc/rustdoc)
+  examples-sqlalchemy-contract/   # ORM-pattern migration: models as schema contract, ORM vs columnar
   check-all.sh           # one command: generate data, run all suites, build docs
   clean-all.sh           # inverse of check-all.sh: remove generated artifacts
   .github/workflows/     # ci.yml (runs check-all.sh) + docs.yml (publishes to GitHub Pages)
 ```
 
-The five subprojects (`exemplos-pandas`, `exemplos-pyarrow`, `exemplos-DuckDB`,
-`exemplos-rust-extension`, `exemplos-sqlalchemy-contract`) each have their own
+The five subprojects (`examples-pandas`, `examples-pyarrow`, `examples-DuckDB`,
+`examples-rust-extension`, `examples-sqlalchemy-contract`) each have their own
 `README.md`, `pyproject.toml`,
 `examples/`, and `tests/`. They are **fully independent** — there is no
 top-level Python package and no shared virtualenv.
@@ -57,7 +57,7 @@ top-level Python package and no shared virtualenv.
   Rust extension), and dev tools (`pytest`, `pdoc`). No system Python or manual
   venv activation needed.
 - **Rust toolchain** ([rustup.rs](https://rustup.rs)) — `cargo`/`rustc`, only
-  for `exemplos-rust-extension` (compiling the PyO3 extension via maturin and generating
+  for `examples-rust-extension` (compiling the PyO3 extension via maturin and generating
   rustdoc).
 - **bash** — for `check-all.sh` / `clean-all.sh`.
 - **Internet on first run** — for `uv`/`cargo` to fetch dependencies.
@@ -96,10 +96,10 @@ Remove generated artifacts (inverse of `check-all.sh`):
 Per-project work — always operate **inside** the subproject directory:
 
 ```bash
-(cd exemplos-pandas && uv run pytest)                 # run one suite
-(cd exemplos-pandas && uv run examples/01_loading_and_dtypes.py)   # run one example
-(cd exemplos-rust-extension && uv sync)               # (re)compile the Rust extension after editing src/lib.rs
-(cd exemplos-rust-extension && uv run pytest -m "not slow")        # skip the full ~15s pipeline test
+(cd examples-pandas && uv run pytest)                 # run one suite
+(cd examples-pandas && uv run examples/01_loading_and_dtypes.py)   # run one example
+(cd examples-rust-extension && uv sync)               # (re)compile the Rust extension after editing src/lib.rs
+(cd examples-rust-extension && uv run pytest -m "not slow")        # skip the full ~15s pipeline test
 ```
 
 ## Conventions to follow
@@ -119,7 +119,7 @@ Per-project work — always operate **inside** the subproject directory:
   loaders, and a `section(title)` printer. Reuse these instead of re-deriving
   paths.
 - **Arrow-backed everywhere.** pandas reads use `engine="pyarrow",
-  dtype_backend="pyarrow"` (see `exemplos-pandas/examples/_common.py`). The whole point
+  dtype_backend="pyarrow"` (see `examples-pandas/examples/_common.py`). The whole point
   is zero-copy interop across pandas/pyarrow/DuckDB/Rust via the Arrow format.
 - **Money is `decimal128(12,2)` (2 decimal places), never float.** Summation/
   multiplication preserve the exact type. The Rust layer converts to
@@ -131,10 +131,10 @@ Per-project work — always operate **inside** the subproject directory:
   `python/etl_rust_ext/__init__.py` supplies defaults and the docstring. After
   any change to `src/lib.rs`, run `uv sync` (or `uv run ...`) to recompile.
 - **Network-dependent tests** are marked `@pytest.mark.network` and skipped by
-  the `--no-network` flag (wired in `exemplos-DuckDB/tests/conftest.py`). Slow tests
-  (full pipeline over `data/raw`) are marked `slow` in `exemplos-rust-extension`.
+  the `--no-network` flag (wired in `examples-DuckDB/tests/conftest.py`). Slow tests
+  (full pipeline over `data/raw`) are marked `slow` in `examples-rust-extension`.
 - **Generated artifacts are gitignored** and must not be committed: parquet
-  (`*.parquet`), `.venv/`, `target/`, `*.so`, `exemplos-rust-extension/docs/`, and the
+  (`*.parquet`), `.venv/`, `target/`, `*.so`, `examples-rust-extension/docs/`, and the
   lockfiles `uv.lock` / `Cargo.lock` (this project deliberately does not version
   lockfiles). See `.gitignore`.
 
@@ -150,7 +150,7 @@ affected subproject's suite (or `./check-all.sh`) — CI runs exactly
 
 ## Documentation
 
-- **Python side:** `pdoc` renders `exemplos-rust-extension/docs/` from Google-style
+- **Python side:** `pdoc` renders `examples-rust-extension/docs/` from Google-style
   docstrings (`--math --mermaid --docformat google`, custom
   `pdoc-templates/`). Generated, not versioned.
 - **Rust side:** `cargo doc --no-deps --document-private-items` renders rustdoc
