@@ -139,6 +139,96 @@ no cabeçalho do exemplo 20.
   jeito de resgatar as surrogate keys geradas por um lote inteiro numa só ida ao
   banco. *(exemplo 23)*
 
+## Recursos OLTP e eficiência do DuckDB
+
+Uma dúvida recorrente de quem chega vindo de Postgres/MySQL: *o DuckDB tem chave
+primária, foreign key, verificação de integridade referencial e chave sequencial
+automática? Se a origem é um parquet, ele copia tudo para o `.duckdb`? E como
+tudo isso se mantém eficiente sem um serviço dedicado rodando atrás?* As três
+respostas se conectam — e a conclusão muda como você modela a carga.
+
+### 1. As constraints existem e são verificadas de verdade
+
+`PRIMARY KEY`, `UNIQUE`, `NOT NULL`, `CHECK` e `FOREIGN KEY` são todos
+**aplicados no momento do `INSERT`/`UPDATE`** — não são decorativos. Para
+verificá-los de forma eficiente, o DuckDB cria **automaticamente um índice ART**
+(*Adaptive Radix Tree*) para cada constraint de PK, `UNIQUE` e FK. Um `INSERT`
+que referencie um valor inexistente na tabela pai é rejeitado.
+
+Chave sequencial automática **não** existe como `AUTO_INCREMENT`/`SERIAL`/
+`IDENTITY`; o idioma é `DEFAULT nextval('seq')`, exatamente o que o exemplo 23
+exercita (ver "Chaves geradas pelo banco", acima).
+
+**As pegadinhas**, que aparecem cedo:
+
+- **`ON DELETE CASCADE` é aceito pelo parser mas não executa o cascade** — apagar
+  uma linha pai ainda referenciada continua dando erro de constraint. `INSERT` em
+  tabela com FK auto-referenciada também não é suportado.
+- **FK não atravessa bancos** (`ATTACH`): referência entre arquivos diferentes
+  não funciona.
+- **`UPDATE` é reescrito internamente como `DELETE` + `INSERT`**, processado em
+  chunks de 2048 linhas. Isso faz um `UPDATE` legítimo (ex.: `SET i = i + 1` numa
+  coluna com PK) estourar violação de constraint quando a tabela passa do tamanho
+  do vetor — o motor ainda não "viu" o chunk seguinte.
+- **O índice ART precisa caber em memória** durante a criação; em tabela grande
+  isso vira OOM (ver "Checklist para não cair no OOM", adiante).
+
+> As constraints funcionam bem como **guarda de qualidade** em tabelas
+> dimensionais e cargas controladas. Elas não foram pensadas para sustentar um
+> modelo transacional com muitos updates pontuais.
+
+### 2. Parquet: copia ou não? Depende do comando
+
+Não existe cópia implícita:
+
+| Comando | O que acontece |
+| --- | --- |
+| `SELECT * FROM 'arq.parquet'` | lê direto do arquivo; **zero cópia**, zero estado no `.duckdb` |
+| `CREATE VIEW v AS SELECT * FROM 'arq.parquet'` | guarda só o **texto da consulta** no catálogo; o parquet é relido a cada query |
+| `CREATE TABLE t AS SELECT * FROM 'arq.parquet'` | **copia**, convertendo para o formato colunar nativo dentro do `.duckdb` |
+| `COPY t FROM 'arq.parquet'` | idem — ingere de fato |
+
+A consequência amarra as duas primeiras perguntas: **não dá para colocar PK/FK
+sobre um parquet.** Constraints só existem em tabelas nativas. Se o parquet é a
+fonte e você quer integridade referencial, ou materializa
+(`CREATE TABLE ... AS SELECT`), ou valida por query (`ANTI JOIN`,
+`COUNT(DISTINCT)`) sem constraint declarada — o caminho que o exemplo 08 usa
+para checagem de qualidade.
+
+### 3. Por que é eficiente sem um serviço dedicado
+
+A premissa merece ser invertida: **"sem servidor" não significa "sem engine".** O
+engine completo — parser, otimizador, executor vetorizado, buffer manager, MVCC,
+WAL — está todo lá, compilado como biblioteca **dentro do seu processo**. O
+processo da sua aplicação *é* o servidor. O que foi eliminado não é a máquina de
+banco: é o processo separado.
+
+E é daí que vem o ganho. Boa parte do custo de um SGBD OLTP tradicional não está
+em verificar uma PK — está no **protocolo de rede, na serialização, no
+gerenciamento de pool de conexões e na coordenação entre processos**. Verificar
+uma PK contra um ART em memória é operação de nanossegundos; o `INSERT` no
+Postgres custa caro por causa de tudo *ao redor*.
+
+O preço dessa escolha é o modelo de concorrência — lock de arquivo entre
+processos, MVCC rico dentro do processo —, detalhado na seção "Transações, MVCC e
+concorrência (exemplo 21)". A durabilidade continua garantida por WAL +
+`CHECKPOINT` executados dentro do próprio processo: não há daemon de vacuum nem
+de recuperação porque não há nada além do seu processo para coordenar.
+
+### A conclusão que importa para arquitetura
+
+**O custo real das constraints no DuckDB não é o de manutenção em runtime — é o
+de carga.** A checagem linha a linha de PK/FK derruba o throughput de bulk load
+em ordens de magnitude, justamente porque **quebra o padrão vetorizado** que dá
+velocidade ao motor.
+
+O padrão que funciona bem:
+
+1. **carregar sem constraint** (bulk load vetorizado, no talo);
+2. **validar em batch com SQL** (`ANTI JOIN`, `GROUP BY ... HAVING COUNT(*) > 1`);
+3. **reservar PK/FK para tabelas pequenas de referência**, onde a garantia
+   declarativa vale o custo.
+
 ## Performance sem índices (exemplo 12)
 
 A dúvida clássica de quem vem de bases transacionais: "onde crio o índice?".
@@ -366,3 +456,5 @@ com `@pytest.mark.network`; a flag `--no-network` (definida em
 - [Configuration](https://duckdb.org/docs/stable/configuration/overview) — referência de `SET`, incluindo `memory_limit`, `temp_directory` e `preserve_insertion_order` usados no exemplo 04 (spill).
 - [Tuning Workloads](https://duckdb.org/docs/stable/guides/performance/how_to_tune_workloads) — guia de performance: memória, paralelismo e operadores que fazem spill.
 - [SQL on Arrow](https://duckdb.org/docs/stable/guides/python/sql_on_arrow) — consulta direta sobre objetos pyarrow e retorno via `.to_arrow_table()`, exercitados no exemplo 05.
+- [Constraints](https://duckdb.org/docs/stable/sql/constraints) — `PRIMARY KEY`, `UNIQUE`, `NOT NULL`, `CHECK` e `FOREIGN KEY`, incluindo o custo em bulk load discutido em "Recursos OLTP e eficiência do DuckDB".
+- [Indexes](https://duckdb.org/docs/stable/sql/indexes) — o índice ART criado automaticamente por PK/`UNIQUE`/FK, e por que ele não acelera JOIN (exemplo 16).
