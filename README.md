@@ -17,12 +17,12 @@ etl-cookbook-tutorial/
   data/
     generate_data.py   # gera as bases fictícias (script standalone, PEP 723)
     raw/               # parquet particionado de entrada (customers, products, orders)
-    rich/              # parquet de saída do ETL (exemplos-rust-extension/run_etl.py)
-  exemplos-pandas/              # API do pandas com backend Arrow
-  exemplos-pyarrow/             # API nativa do pyarrow
-  exemplos-DuckDB/              # SQL em memória sobre parquet, com spill configurável
-  exemplos-rust-extension/      # extensão Rust (PyO3 + pyo3-arrow) + ETL completo + docs (pdoc)
-  exemplos-sqlalchemy-contract/ # migração do padrão ORM: modelos como contrato, ORM vs colunar, árvore de contas
+    rich/              # parquet de saída do ETL (examples-rust-extension/run_etl.py)
+  examples-pandas/              # API do pandas com backend Arrow
+  examples-pyarrow/             # API nativa do pyarrow
+  examples-DuckDB/              # SQL em memória sobre parquet, com spill configurável
+  examples-rust-extension/      # extensão Rust (PyO3 + pyo3-arrow) + ETL completo + docs (pdoc)
+  examples-sqlalchemy-contract/ # migração do padrão ORM: modelos como contrato, ORM vs colunar, árvore de contas
 ```
 
 ## Mapa de objetivos
@@ -31,13 +31,13 @@ etl-cookbook-tutorial/
 | --- | --- | --- |
 | O1 | Python | todos os projetos |
 | O2 | `uv` para gerenciar dependências | um `pyproject.toml`/`.venv` isolado por pasta |
-| O3 | Extensão Python em Rust via PyO3 | [`exemplos-rust-extension/src/lib.rs`](exemplos-rust-extension/src/lib.rs) |
-| O4 | pyarrow | [`exemplos-pyarrow/`](exemplos-pyarrow), e usado também em `exemplos-pandas`/`exemplos-DuckDB`/`exemplos-rust-extension` |
-| O5 | pandas com Arrow como backend | [`exemplos-pandas/`](exemplos-pandas) (`dtype_backend="pyarrow"`) |
-| O6 | Passagem zero-copy Python↔Rust via `pyo3-arrow` | [`exemplos-rust-extension/`](exemplos-rust-extension) (inspirado em [pyo3-cookbook](https://github.com/felipenoris/pyo3-cookbook)) |
+| O3 | Extensão Python em Rust via PyO3 | [`examples-rust-extension/src/lib.rs`](examples-rust-extension/src/lib.rs) |
+| O4 | pyarrow | [`examples-pyarrow/`](examples-pyarrow), e usado também em `examples-pandas`/`examples-DuckDB`/`examples-rust-extension` |
+| O5 | pandas com Arrow como backend | [`examples-pandas/`](examples-pandas) (`dtype_backend="pyarrow"`) |
+| O6 | Passagem zero-copy Python↔Rust via `pyo3-arrow` | [`examples-rust-extension/`](examples-rust-extension) (inspirado em [pyo3-cookbook](https://github.com/felipenoris/pyo3-cookbook)) |
 | O7 | ETL a partir de parquet particionado | [`data/raw/`](data/raw) (orders, customers, products) |
-| O8 | DuckDB com JOIN/SQL complexo + spill | [`exemplos-DuckDB/`](exemplos-DuckDB) |
-| O9 | Documentação HTML estática a partir de docstrings | [`exemplos-rust-extension/docs/`](exemplos-rust-extension/docs) (gerado com `pdoc`, abre via `file://`) |
+| O8 | DuckDB com JOIN/SQL complexo + spill | [`examples-DuckDB/`](examples-DuckDB) |
+| O9 | Documentação HTML estática a partir de docstrings | [`examples-rust-extension/docs/`](examples-rust-extension/docs) (gerado com `pdoc`, abre via `file://`) |
 
 ## Base de dados fictícia (`data/raw`)
 
@@ -76,7 +76,7 @@ Para rodar o `./check-all.sh` (e o repositório em geral), a máquina precisa de
    ferramentas de dev (`pytest`, `pdoc`). Não é preciso ter Python instalado
    nem ativar venv manualmente.
 2. **Toolchain Rust** ([rustup.rs](https://rustup.rs)) — `cargo`/`rustc`,
-   usados para compilar a extensão PyO3 (`exemplos-rust-extension`) e gerar o rustdoc.
+   usados para compilar a extensão PyO3 (`examples-rust-extension`) e gerar o rustdoc.
    As crates (pyo3, arrow) são baixadas pelo cargo na primeira compilação.
 3. **Acesso à internet na primeira execução** — para o `uv` e o `cargo`
    baixarem dependências. Depois disso, apenas 3 testes do DuckDB (leitura de
@@ -105,7 +105,7 @@ ao lado da referência da extensão Rust e dos scripts do pipeline.
 
 Acabou de clonar? Um único comando gera os dados, roda as 5 suítes de testes
 (cujos smoke tests executam **todos** os scripts de `examples/`), executa os
-scripts standalone do `exemplos-rust-extension` e gera as documentações (doctest, pdoc
+scripts standalone do `examples-rust-extension` e gera as documentações (doctest, pdoc
 e cargo doc):
 
 ```bash
@@ -146,18 +146,18 @@ ligando a documentação Python (`/python`) e a Rust (`/rust`).
 1. `uv run --script data/generate_data.py --generate` — obrigatório após clonar o
    repositório, já que os parquet não são versionados (o `./check-all.sh`
    acima já faz isso automaticamente).
-2. [`exemplos-pandas/`](exemplos-pandas) e [`exemplos-pyarrow/`](exemplos-pyarrow) — mesmos conceitos (seleção,
+2. [`examples-pandas/`](examples-pandas) e [`examples-pyarrow/`](examples-pyarrow) — mesmos conceitos (seleção,
    limpeza, groupby, joins, pivot), comparando a API de alto nível do pandas
    com a API nativa do Arrow — mais o interop zero-copy entre as duas e o
    padrão híbrido (pyarrow nas bordas, pandas no miolo) para equipes
    proficientes em pandas.
-3. [`exemplos-DuckDB/`](exemplos-DuckDB) — os mesmos joins/agregações em SQL, mais o exemplo de
+3. [`examples-DuckDB/`](examples-DuckDB) — os mesmos joins/agregações em SQL, mais o exemplo de
    `memory_limit`/spill em disco e um bloco de funcionalidades de ETL:
    `COPY TO` particionado com recarga idempotente, staging persistente com
    UPSERT, ingestão de CSV com quarentena de rejeitadas, SQL avançado
    (recursiva, `PIVOT`, `ASOF JOIN`), macros/UDFs Python e
    `EXPORT`/`IMPORT DATABASE`.
-4. [`exemplos-rust-extension/`](exemplos-rust-extension) — fecha o ciclo: um ETL real que usa
+4. [`examples-rust-extension/`](examples-rust-extension) — fecha o ciclo: um ETL real que usa
    DuckDB (extract+join+spill) → pyarrow (projeção) → Rust via `pyo3-arrow`
    (transformação com estado, zero-copy) → pandas (resumo) → grava em
    `data/rich/order_metrics/`. Além do pipeline, exercita **multithreading**
@@ -165,7 +165,7 @@ ligando a documentação Python (`/python`) e a Rust (`/rust`).
    por backpressure), **todos os tipos Arrow** manipulados no lado nativo
    (incluindo `decimal.Decimal`/`datetime.date` cruzando a fronteira) e o
    estudo de **materialização de dados 1:N** (copiar vs. emprestar fatias).
-5. [`exemplos-sqlalchemy-contract/`](exemplos-sqlalchemy-contract) — para equipes vindas do
+5. [`examples-sqlalchemy-contract/`](examples-sqlalchemy-contract) — para equipes vindas do
    padrão ORM + banco relacional efêmero: modelos SQLAlchemy no papel de
    contrato de schema (não de veículo de dados), a decomposição dos **cinco
    custos** que tornam o ORM lento, medidos na escrita (ORM vs. Core vs.
@@ -182,11 +182,11 @@ Cada projeto tem sua própria suíte pytest (smoke tests dos exemplos + testes
 unitários dos contratos assumidos). Para rodar tudo, a partir da raiz:
 
 ```bash
-(cd exemplos-pandas && uv run pytest)
-(cd exemplos-pyarrow && uv run pytest)
-(cd exemplos-DuckDB && uv run pytest)
-(cd exemplos-rust-extension && uv run pytest)   # -m "not slow" pula o pipeline completo
-(cd exemplos-sqlalchemy-contract && uv run pytest)
+(cd examples-pandas && uv run pytest)
+(cd examples-pyarrow && uv run pytest)
+(cd examples-DuckDB && uv run pytest)
+(cd examples-rust-extension && uv run pytest)   # -m "not slow" pula o pipeline completo
+(cd examples-sqlalchemy-contract && uv run pytest)
 ```
 
 ## Referências
@@ -199,8 +199,8 @@ Ferramentas usadas em todo o tutorial:
 - [pytest — documentação oficial](https://docs.pytest.org/en/stable/) — usado nas suítes de teste de todas as subpastas.
 
 Referências específicas de cada tecnologia estão no `README.md` da subpasta
-correspondente ([`exemplos-pandas/`](exemplos-pandas), [`exemplos-pyarrow/`](exemplos-pyarrow), [`exemplos-DuckDB/`](exemplos-DuckDB),
-[`exemplos-rust-extension/`](exemplos-rust-extension)).
+correspondente ([`examples-pandas/`](examples-pandas), [`examples-pyarrow/`](examples-pyarrow), [`examples-DuckDB/`](examples-DuckDB),
+[`examples-rust-extension/`](examples-rust-extension)).
 
 ## Licença
 
