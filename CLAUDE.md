@@ -114,6 +114,11 @@ Per-project work — always operate **inside** the subproject directory:
   a subprocess, and asserts exit 0 **and** non-empty stdout. So a new example is
   covered the moment it lands in `examples/` — but it must actually print
   something and exit cleanly.
+- **Adding an example touches three places, not one.** Besides
+  `examples/NN_*.py` (+ a `tests/test_*.py` for its contracts), update the
+  example table in the subproject's `README.md` **and** the example count
+  hardcoded in the `check-all.sh` step label (e.g. `"DuckDB: suíte pytest (24
+  exemplos)"`). Nothing enforces those two — they silently go stale.
 - **Shared helpers live in `examples/_common.py`** per subproject: repo-root/
   data paths (`REPO_ROOT = Path(__file__).resolve().parents[2]`), dataset
   loaders, and a `section(title)` printer. Reuse these instead of re-deriving
@@ -130,6 +135,15 @@ Per-project work — always operate **inside** the subproject directory:
   arguments explicitly; a thin same-named Python wrapper in
   `python/etl_rust_ext/__init__.py` supplies defaults and the docstring. After
   any change to `src/lib.rs`, run `uv sync` (or `uv run ...`) to recompile.
+- **DuckDB → Arrow streaming.** Use `to_arrow_reader(n)` (from either
+  `con.execute(sql)` or `con.sql(sql)` — same `pyarrow.RecordBatchReader`
+  class); `fetch_record_batch(n)` is the same method under its old name and
+  emits `DeprecationWarning` since DuckDB 1.5. The reader is lazy and
+  single-pass: it never rewinds. **Never consume a reader with the connection
+  that produced it** — feeding an enriched reader back into the same `con` via
+  replacement scan makes DuckDB reenter itself, observed as either a silent
+  `count = 0` or a hang. Use two connections (one produces, one consumes). See
+  `examples-DuckDB/examples/24_record_batch_pipeline.py`.
 - **Network-dependent tests** are marked `@pytest.mark.network` and skipped by
   the `--no-network` flag (wired in `examples-DuckDB/tests/conftest.py`). Slow tests
   (full pipeline over `data/raw`) are marked `slow` in `examples-rust-extension`.
