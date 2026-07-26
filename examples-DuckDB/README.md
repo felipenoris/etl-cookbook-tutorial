@@ -66,6 +66,7 @@ uv sync
 | `21_transactions_and_mvcc.py` | `BEGIN`/`COMMIT`/`ROLLBACK`, atomicidade sob erro (transação abortada), MVCC/isolamento por snapshot entre conexões, concorrência otimista (conflito na mesma linha) |
 | `22_parameterized_queries.py` | placeholders `?`/`$1`/`$nome`, injeção de SQL medida (0 vs 2000 linhas), tipos serializados pelo driver, `PREPARE`/`EXECUTE`, `executemany`, e a ressalva "parâmetro é valor, não identificador" |
 | `23_surrogate_keys_returning.py` | chaves primárias sequenciais (surrogate keys): `CREATE SEQUENCE` + `DEFAULT nextval` (não há `IDENTITY`), `RETURNING` para resgatar as chaves geradas em lote, tradução natural→surrogate no fato, carga incremental por anti-join |
+| `24_record_batch_pipeline.py` | `to_arrow_reader` (o antigo `fetch_record_batch`): lote entra / lote sai sem sair do Arrow, no mesmo formato das funções do Rust; buffers reaproveitados por referência (prova por endereço), estado entre lotes, e o reader do Python devolvido ao DuckDB por replacement scan |
 
 ## Glossário: comandos além do SQL transacional básico
 
@@ -228,6 +229,56 @@ O padrão que funciona bem:
 2. **validar em batch com SQL** (`ANTI JOIN`, `GROUP BY ... HAVING COUNT(*) > 1`);
 3. **reservar PK/FK para tabelas pequenas de referência**, onde a garantia
    declarativa vale o custo.
+
+## Streaming em lotes: RecordBatch entrando e saindo (exemplos 15 e 24)
+
+Nem todo resultado cabe na RAM, e nem todo cálculo cabe em SQL. Para esses
+casos o DuckDB entrega o resultado em **lotes Arrow**, um `RecordBatch` por
+vez, em vez de materializar a tabela inteira.
+
+### As duas portas (a mesma classe)
+
+```python
+con.execute(sql).to_arrow_reader(n)   # a partir do result set (estilo DBAPI)
+con.sql(sql).to_arrow_reader(n)       # a partir da relation (lazy)
+```
+
+Ambas devolvem um `pyarrow.RecordBatchReader`; muda só por onde se chega nele.
+O nome **`fetch_record_batch(n)`**, comum em código e tutoriais mais antigos,
+é este mesmo método com o nome da família `fetch*`: ainda funciona, mas desde
+o DuckDB 1.5 emite `DeprecationWarning` apontando para `to_arrow_reader()`.
+
+O reader é **lazy e de passada única**: cada `next()` puxa um lote do motor, e
+depois de esgotado ele não rebobina.
+
+### O que fazer com o lote — os dois caminhos
+
+| | exemplo 15 | exemplo 24 |
+| --- | --- | --- |
+| o lote vira | listas Python (`to_pylist()`) | continua `RecordBatch` |
+| a saída é | listas, remontadas em `pa.table` no fim | um `RecordBatch` com schema estendido |
+| o custo | µs **por linha** | o de `pyarrow.compute` (C++) |
+| quando usar | a lógica é sequencial de verdade | a lógica vetoriza |
+
+O exemplo 24 segue a forma das funções do `rust-extension`
+(`add_line_total`, `compute_customer_running_spend`): **lote entra, lote sai**,
+com as colunas de entrada repassadas **por referência** e só a coluna nova
+alocada. Em Rust isso é `columns().to_vec()` clonando `Arc`s; em Python é
+`list(batch.columns)` guardando os mesmos `pa.Array` — e o exemplo comprova
+comparando o **endereço do buffer** antes e depois.
+
+### Devolvendo o resultado ao DuckDB
+
+Com `pa.RecordBatchReader.from_batches(schema, gerador)`, o lado Python vira
+mais um reader, que o DuckDB varre por replacement scan como se fosse tabela.
+O pipeline inteiro fica sem materialização: o motor produz um lote, o Python
+enriquece aquele lote, o motor consome, e só então o próximo é lido.
+
+> **Use uma conexão separada para consumir.** Se o `SELECT` que lê o reader
+> enriquecido rodar na MESMA conexão que produziu o reader de origem, o DuckDB
+> reentra em si mesmo — o comportamento observado foi ora um silencioso
+> `count = 0` (o stream de origem é invalidado pela nova query), ora um
+> travamento. Duas conexões resolvem: uma só produz, a outra só consome.
 
 ## Performance sem índices (exemplo 12)
 
