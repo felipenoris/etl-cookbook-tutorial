@@ -14,8 +14,13 @@ crate-type = ["cdylib"]
 pyo3 = { version = "0.29", features = ["extension-module", "rust_decimal", "chrono"] }
 pyo3-arrow = "0.19"
 arrow-array = "59"
-arrow-schema = "59"
+# "canonical_extension_types": traz arrow_schema::extension::Json (`arrow.json`),
+# o tipo de extensão canônico usado pelas colunas JSON opacas
+arrow-schema = { version = "59", features = ["canonical_extension_types"] }
 parquet = "59"                 # ArrowWriter: escrita incremental de parquet no BoundedRevenueProjector
 crossbeam-channel = "0.5"      # fila MPMC limitada (backpressure) do pool de workers
 rust_decimal = "1"
 chrono = "0.4"
+# "raw_value": guarda o TOKEN original do número JSON em vez de convertê-lo
+# para f64 — é o que permite extrair um decimal exato de dentro do documento
+serde_json = { version = "1", features = ["raw_value"] }

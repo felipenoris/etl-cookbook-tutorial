@@ -141,6 +141,7 @@ e os arrays do Rust (`arrow-rs`, usados na extensão via `pyo3-arrow`):
 | Struct | `STRUCT(...)` | `struct<...>` | grupo aninhado | `struct<...>[pyarrow]` / `dict` | `StructArray` (arrays-filha) |
 | Map | `MAP(VARCHAR,VARCHAR)` | `map<utf8,utf8>` | `MAP` (key_value) | `map<...>[pyarrow]` / lista de pares | `MapArray` (keys/values + offsets) |
 | Binary | `BLOB` | `binary` | `BYTE_ARRAY` | `binary[pyarrow]` / `bytes` | `BinaryArray` (`&[u8]`) |
+| JSON | `JSON` | `extension<arrow.json>` (utf8) | `BYTE_ARRAY` (JSON) | `json[pyarrow]` / `str` | `StringArray` + `extension::Json` |
 
 Observações que os exemplos demonstram na prática:
 
@@ -167,10 +168,26 @@ Observações que os exemplos demonstram na prática:
   antes do join. No Rust, a escrita usa os builders do arrow-rs
   (`ListBuilder`, `MapBuilder`, `StructArray`) — ver `roundtrip_all_types`
   em `etl_rust_ext`, que exercita leitura e escrita dos 11 tipos.
+- **JSON**: é a exceção da tabela — não é um `DataType`, e sim o **tipo de
+  extensão canônico** `arrow.json`: storage `utf8` MAIS um marcador
+  (`ARROW:extension:name`) nos metadados do campo. O marcador é o que separa
+  um documento de uma string qualquer, e ele **se perde em silêncio**:
+  sobrevive a Parquet, pandas, `write_dataset` e à fronteira com o Rust, mas
+  o `DuckDB -> Arrow` o descarta por padrão (é preciso
+  `SET arrow_lossless_conversion = true`). Duas consequências práticas: JSON
+  **não tem tipo decimal nem date**, então dinheiro e datas degradam para
+  float/string se viajarem dentro do documento — devem ser colunas
+  *shredded*; e um round-trip JSON garante igualdade **semântica**, nunca de
+  bytes (reparsear reordena chaves e come whitespace). Ver
+  `shred_json_column` em `etl_rust_ext`, que extrai decimal exato do token
+  cru via `RawValue`.
 - Onde ver cada camada: [`examples-pyarrow/examples/10`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-pyarrow/examples/10_data_types.py),
   [`examples-pandas/examples/09`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-pandas/examples/09_arrow_data_types.py),
   [`examples-DuckDB/examples/14`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-DuckDB/examples/14_data_types.py) e
   [`examples-rust-extension/run_data_types.py`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-rust-extension/run_data_types.py).
+  Para o JSON opaco:
+  [`examples-DuckDB/examples/19`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-DuckDB/examples/19_json_ingestion_and_extraction.py) e
+  [`examples-rust-extension/run_json_types.py`](https://github.com/felipenoris/etl-cookbook-tutorial/blob/main/examples-rust-extension/run_json_types.py).
 
 ## Performance: comparando as abordagens
 

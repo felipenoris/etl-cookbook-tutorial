@@ -26,11 +26,13 @@ from ._etl_rust_ext import (
     ParallelRevenueProjector,
     add_line_total,
     flatten_customer_profile,
+    normalize_json_column,
     project_nested_borrowed,
     project_nested_materialized,
     project_nested_reused,
     project_revenue_batch,
     roundtrip_all_types,
+    shred_json_column,
     sum_decimal_column,
 )
 from ._etl_rust_ext import compute_customer_running_spend as _compute_customer_running_spend
@@ -112,17 +114,84 @@ def compute_product_margin(
     return _compute_product_margin(batch, desconto)
 
 
+def is_json_column(batch: pa.RecordBatch, column: str) -> bool:
+    """Diz se a coluna carrega o tipo de extensão canônico ``arrow.json``.
+
+    O marcador é o que separa um *documento* de uma string qualquer. Como ele
+    se perde em silêncio (ver :func:`as_json_column`), vale checá-lo nas
+    fronteiras do pipeline em vez de assumir que sobreviveu.
+
+    Args:
+        batch: RecordBatch a inspecionar.
+        column: nome da coluna.
+
+    Returns:
+        ``True`` se o campo for ``extension<arrow.json>``; ``False`` se a
+        coluna não existir ou for de outro tipo (inclusive ``utf8`` puro).
+    """
+    idx = batch.schema.get_field_index(column)
+    return idx >= 0 and batch.schema.field(idx).type == pa.json_()
+
+
+def as_json_column(batch: pa.RecordBatch, column: str) -> pa.RecordBatch:
+    """Marca uma coluna ``utf8`` como ``arrow.json``, sem copiar os buffers.
+
+    O reparo explícito para quando o marcador foi descartado por algum hop. O
+    caso comum é o DuckDB: ``con.sql(...).arrow()`` devolve uma coluna ``JSON``
+    como ``utf8`` simples, a menos que a conexão tenha
+    ``SET arrow_lossless_conversion = true``. Preferir a flag é melhor — ela
+    preserva a semântica na origem; esta função é a saída para quando a origem
+    não está sob seu controle.
+
+    Note que **marcar é uma declaração, não uma validação**: o conteúdo não é
+    parseado aqui. Quem valida é o Rust, ao consumir a coluna
+    (:func:`normalize_json_column` e :func:`shred_json_column` falham com
+    ``ValueError`` em documento malformado).
+
+    Args:
+        batch: RecordBatch de origem.
+        column: nome de uma coluna ``string``/``utf8`` (ou já ``arrow.json``).
+
+    Returns:
+        Novo ``pyarrow.RecordBatch`` com a coluna remarcada. Se ela já for
+        ``arrow.json``, devolve o batch inalterado.
+
+    Raises:
+        ValueError: se a coluna não existir.
+        TypeError: se o storage não for ``utf8`` — o ``arrow.json`` só aceita
+            texto, e converter um tipo aninhado para JSON é *serializar*,
+            não remarcar.
+    """
+    idx = batch.schema.get_field_index(column)
+    if idx < 0:
+        raise ValueError(f"coluna '{column}' não encontrada no batch")
+    coluna = batch.column(idx)
+    if coluna.type == pa.json_():
+        return batch
+    if coluna.type != pa.string():
+        raise TypeError(
+            f"coluna '{column}' é {coluna.type}, e arrow.json exige storage utf8; "
+            "para um tipo aninhado, serialize o conteúdo antes de marcar"
+        )
+    marcada = pa.ExtensionArray.from_storage(pa.json_(), coluna)
+    return batch.set_column(idx, pa.field(column, pa.json_()), marcada)
+
+
 __all__ = [
     "BoundedRevenueProjector",
     "ParallelRevenueProjector",
     "add_line_total",
+    "as_json_column",
     "compute_customer_running_spend",
     "compute_product_margin",
     "flatten_customer_profile",
+    "is_json_column",
+    "normalize_json_column",
     "project_nested_borrowed",
     "project_nested_materialized",
     "project_nested_reused",
     "project_revenue_batch",
     "roundtrip_all_types",
+    "shred_json_column",
     "sum_decimal_column",
 ]
