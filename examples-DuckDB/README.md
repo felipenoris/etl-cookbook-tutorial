@@ -67,6 +67,7 @@ uv sync
 | `22_parameterized_queries.py` | placeholders `?`/`$1`/`$nome`, injeção de SQL medida (0 vs 2000 linhas), tipos serializados pelo driver, `PREPARE`/`EXECUTE`, `executemany`, e a ressalva "parâmetro é valor, não identificador" |
 | `23_surrogate_keys_returning.py` | chaves primárias sequenciais (surrogate keys): `CREATE SEQUENCE` + `DEFAULT nextval` (não há `IDENTITY`), `RETURNING` para resgatar as chaves geradas em lote, tradução natural→surrogate no fato, carga incremental por anti-join |
 | `24_record_batch_pipeline.py` | `to_arrow_reader` (o antigo `fetch_record_batch`): lote entra / lote sai sem sair do Arrow, no mesmo formato das funções do Rust; buffers reaproveitados por referência (prova por endereço), estado entre lotes, e o reader do Python devolvido ao DuckDB por replacement scan |
+| `25_metadata_introspection.py` | introspecção sem ler dados: `parquet_schema` (tipo físico vs lógico), `parquet_file_metadata` (footer), `parquet_metadata` (row group × coluna: compressão, encoding, nulos), `parquet_kv_metadata`; o lado catálogo (`DESCRIBE`, `duckdb_columns`, `information_schema`, `.description`) e um detector de schema drift entre partições, com `union_by_name` reconciliando o caso benigno |
 
 ## Glossário: comandos além do SQL transacional básico
 
@@ -279,6 +280,43 @@ enriquece aquele lote, o motor consome, e só então o próximo é lido.
 > reentra em si mesmo — o comportamento observado foi ora um silencioso
 > `count = 0` (o stream de origem é invalidado pela nova query), ora um
 > travamento. Duas conexões resolvem: uma só produz, a outra só consome.
+
+## Introspecção de metadados (exemplo 25)
+
+Antes de processar um diretório de parquet, a pergunta é sempre "o que tem aqui
+dentro?". Nada disso exige ler os dados: cada arquivo carrega no fim um
+**footer** que descreve o arquivo inteiro, e o DuckDB o expõe como quatro table
+functions — uma por nível da árvore de metadados.
+
+| Nível | Função | Uma linha por | Responde |
+| --- | --- | --- | --- |
+| schema | `parquet_schema(f)` | nó do schema | quais colunas, de que tipo, nullable |
+| arquivo | `parquet_file_metadata(f)` | arquivo | `num_rows`, `num_row_groups`, `created_by`, tamanho |
+| row group × coluna | `parquet_metadata(f)` | column chunk | `compression`, `encodings`, min/max, `stats_null_count`, bytes |
+| chave/valor | `parquet_kv_metadata(f)` | par key/value | metadados livres da ferramenta que escreveu |
+
+As quatro aceitam **glob** e devolvem `file_name` — é isso que torna
+"comparar o schema de mil arquivos" uma query só, em vez de mil aberturas.
+
+**Tipo físico vs tipo lógico.** O parquet só guarda meia dúzia de tipos
+físicos; o resto é tipo físico + anotação. Uma data é `INT32` + `DateType()`,
+um texto é `BYTE_ARRAY` + `StringType()`. `parquet_schema` traz as duas colunas
+e ainda `duckdb_type`, já traduzido. `repetition_type = 'OPTIONAL'` é como o
+formato codifica "aceita nulo".
+
+**Arquivo em disco ≠ tabela no catálogo.** As funções `parquet_*` leem
+arquivos; para tabelas dentro do DuckDB o caminho é `DESCRIBE`,
+`duckdb_columns()`, `duckdb_tables()` e `information_schema.columns` (o
+equivalente padrão SQL, portável). O `DESCRIBE` atravessa os dois mundos: ele
+aceita tanto um nome de tabela quanto uma query — inclusive
+`DESCRIBE SELECT * FROM read_parquet(glob)`. No lado Python, o schema do result
+set vem de graça em `con.execute(sql).description` (DBAPI).
+
+**A ordem de grandeza.** Sobre as 6 partições de `orders` (33,7M de linhas),
+medido no exemplo: `DESCRIBE` do glob inteiro em ~3 ms e `sum(num_rows)` pelo
+footer em ~2 ms, contra dezenas a centenas de ms para varrer **uma só** coluna.
+Toda pergunta sobre estrutura — colunas, tipos, contagem, nulos, tamanho —
+deve ser respondida pelo footer, nunca por uma varredura.
 
 ## Performance sem índices (exemplo 12)
 
