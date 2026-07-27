@@ -19,6 +19,7 @@ examples-rust-extension/
   run_contracts_parallel.py # multithreading: lotes submetidos serialmente, processados em paralelo
   run_reorg_for_upstream.py # etapa final: reordena/particiona a saída paralela (desordenada) p/ o upstream
   run_data_types.py        # tipos Arrow (struct/list/map/decimal/binary...) manipulados no Rust
+  run_json_types.py        # JSON opaco (`arrow.json`) atravessando parquet -> DuckDB -> Arrow -> Rust
   run_nested_params.py     # 1:N no Rust: materializar vs emprestar fatias (a discussão "isso vira um ORM?")
   docs_demo.py             # demonstração dos recursos do pdoc (math, mermaid, include, markdown)
   docs_includes/            # arquivos markdown puxados via `.. include::` nas docstrings
@@ -93,6 +94,11 @@ durante o build. Qualquer mudança em `src/lib.rs` exige rodar `uv sync` (ou
   Rust como `rust_decimal::Decimal` e chega ao Python como `decimal.Decimal`,
   sem passar por float em momento algum.
   Rode `uv run run_data_types.py` para ver tudo em ação sobre `data/raw`.
+- `normalize_json_column(batch, coluna)` / `shred_json_column(batch, coluna)` —
+  o regime do JSON **opaco**, complementar ao aninhamento tipado acima. Os
+  helpers Python `as_json_column` / `is_json_column` cuidam do marcador
+  `arrow.json` do lado do pyarrow. Rode `uv run run_json_types.py` (ver a seção
+  "JSON opaco" abaixo).
 - `project_nested_materialized` / `project_nested_reused` /
   `project_nested_borrowed` — a mesma projeção de contratos com parâmetros
   1:N, em três estratégias de materialização (ver seção abaixo).
@@ -187,6 +193,67 @@ paralelo (≈50% de descidas na sort key, 0 *row groups* puláveis) e o resultad
 reorganização (ordem global determinística, ~80% dos *row groups* puláveis),
 provando que nenhuma linha se perde. É a etapa acrescentada ao diagrama "Fluxo de
 dados do ETL ideal" da [documentação Python](docs/index.html).
+
+## JSON opaco: `arrow.json` atravessando a stack
+
+```bash
+uv run run_json_types.py
+```
+
+O `roundtrip_all_types` cobre o aninhamento **tipado** (`struct`/`list`/`map`):
+a forma é conhecida, está no schema e é validada em toda camada. JSON é o outro
+regime — um documento de **texto** cuja forma varia por linha.
+
+No Arrow, JSON **não é um `DataType` novo**: é o tipo de extensão canônico
+[`arrow.json`](https://arrow.apache.org/docs/format/CanonicalExtensions.html#json),
+que são duas coisas — storage `utf8` **mais** um marcador
+(`ARROW:extension:name`) nos metadados do campo. Esse marcador é a única coisa
+que separa um documento de uma string qualquer.
+
+**O marcador se perde em silêncio.** Onde ele sobrevive e onde não (medido):
+
+| Hop | Marcador |
+| --- | --- |
+| Parquet → pyarrow (logical type `JSON`) | preservado |
+| pyarrow → pandas → pyarrow | preservado |
+| `ds.write_dataset` particionado → leitura | preservado |
+| Python → Rust → Python (pyo3-arrow / C Data Interface) | preservado |
+| Arrow → DuckDB (replacement scan) | preservado (vira `JSON` nativo) |
+| **DuckDB → Arrow (default)** | **descartado — volta como `utf8` puro** |
+| DuckDB → Arrow com `SET arrow_lossless_conversion = true` | preservado |
+
+O elo fraco é único e é o DuckDB por padrão. A perda não quebra nada na hora:
+os dados chegam íntegros e só a semântica some, então o erro aparece muitos
+hops depois. Por isso as funções Rust **recusam** uma `utf8` sem marcador em vez
+de adivinhar; `as_json_column` é o reparo explícito para quando a origem não
+está sob seu controle (preferir a flag continua sendo melhor — ela conserta na
+origem).
+
+Duas armadilhas que o `shred_json_column` torna visíveis:
+
+- **JSON não tem tipo decimal.** A leitura ingênua (`json.loads` no Python,
+  `serde_json::Value` no Rust) entrega `f64` e o dinheiro deixa de ser exato. A
+  função lê o campo com [`RawValue`](https://docs.rs/serde_json/latest/serde_json/value/struct.RawValue.html),
+  que guarda o **token original**, e converte o token direto para
+  `rust_decimal::Decimal` — sem float no meio. As colunas `valor_exato`
+  (`decimal128(12,2)`) e `valor_float` (`float64`) saem lado a lado para que a
+  diferença seja mensurável: somando `0.10 + 0.20 + 0.30`, a primeira dá
+  `0.60` e a segunda, `0.6000000000000001`.
+- **JSON tem três estados onde o SQL tem um.** Chave presente com valor, chave
+  presente valendo `null`, e chave ausente — os dois últimos colapsam em `NULL`
+  numa extração comum (`payload->>'$.valor'` no DuckDB devolve `NULL` para
+  ambos). A coluna `valor_estado` preserva a distinção.
+
+E um contrato que vale registrar: um round-trip JSON garante igualdade
+**semântica, nunca de bytes**. Reparsear normaliza — o whitespace some e as
+chaves saem ordenadas. Se o texto exato importa (assinatura, hash, auditoria),
+guarde os bytes originais numa coluna à parte e não os reparseie.
+
+A regra que sai daqui: **nada que precisa ser exato viaja DENTRO do JSON.**
+Dinheiro e datas são colunas shredded, sempre; o documento opaco carrega só o
+que é genuinamente sem schema. É a mesma tese do
+[exemplo 19 do DuckDB](../examples-DuckDB/examples/19_json_ingestion_and_extraction.py)
+— *JSON entra na borda, o miolo do lakehouse é tipado* — levada até o Rust.
 
 ## Dados 1:N no Rust: materializar ou emprestar?
 

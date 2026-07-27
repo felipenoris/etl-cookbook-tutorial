@@ -3,8 +3,8 @@
 #
 # Executa, em sequência: geração dos dados fictícios (se necessário), as 5
 # suítes pytest (cujos smoke tests executam TODOS os scripts de examples/),
-# os 5 scripts standalone do rust-extension (run_etl, run_contracts_parallel,
-# run_reorg_for_upstream, run_data_types, run_nested_params) e a geração das
+# os 6 scripts standalone do rust-extension (run_etl, run_contracts_parallel,
+# run_reorg_for_upstream, run_data_types, run_json_types, run_nested_params) e a geração das
 # documentações (doctest + pdoc + cargo doc). Qualquer falha interrompe o script
 # com erro.
 #
@@ -50,10 +50,11 @@ step 5/9 "rust-extension: suíte pytest (compila a extensão via maturin no 1º 
 step 6/9 "ETL completo (DuckDB -> pyarrow -> Rust -> pandas -> parquet)"
 (cd examples-rust-extension && uv run run_etl.py)
 
-step 7/9 "Projeção paralela, reorganização pré-upstream, tipos Arrow e 1:N no Rust"
+step 7/9 "Projeção paralela, reorganização pré-upstream, tipos Arrow, JSON e 1:N no Rust"
 (cd examples-rust-extension && uv run run_contracts_parallel.py)
 (cd examples-rust-extension && uv run run_reorg_for_upstream.py)
 (cd examples-rust-extension && uv run run_data_types.py)
+(cd examples-rust-extension && uv run run_json_types.py)
 (cd examples-rust-extension && uv run run_nested_params.py)
 
 step 8/9 "sqlalchemy-contract: suíte pytest (contrato, ORM vs colunar/lote, hierarquia)"
@@ -62,7 +63,7 @@ step 8/9 "sqlalchemy-contract: suíte pytest (contrato, ORM vs colunar/lote, hie
 step 9/9 "Documentação: doctest do docs_demo, pdoc (docs/) e cargo doc (target/doc/)"
 (cd examples-rust-extension && uv run python -m doctest docs_demo.py -v > /dev/null)
 (cd examples-rust-extension && uv run pdoc --math --mermaid --docformat google --template-dir pdoc-templates --output-dir docs \
-    etl_rust_ext ./run_etl.py ./run_contracts_parallel.py ./run_reorg_for_upstream.py ./run_data_types.py ./run_nested_params.py ./docs_demo.py)
+    etl_rust_ext ./run_etl.py ./run_contracts_parallel.py ./run_reorg_for_upstream.py ./run_data_types.py ./run_json_types.py ./run_nested_params.py ./docs_demo.py)
 # `cargo doc` compila o pyo3-ffi, cujo build script precisa de um interpretador
 # Python >= 3.8. Rodar sob `uv run` faz o pyo3 usar o Python do venv isolado
 # (via VIRTUAL_ENV) em vez do Python do sistema, que pode ser antigo demais.

@@ -23,6 +23,10 @@
 //!   como parâmetros.
 //! - `roundtrip_all_types`: leitura E escrita dos 11 tipos da stack em uma
 //!   função só — o teste integral da fronteira.
+//! - `normalize_json_column` e `shred_json_column`: o regime do JSON **opaco**
+//!   (o tipo de extensão canônico `arrow.json` = `utf8` + marcador), que
+//!   complementa o aninhamento tipado dos 11 tipos — ver a seção sobre JSON
+//!   mais abaixo neste arquivo.
 //! - `sum_decimal_column`: a exceção do retorno tabular — devolve um ESCALAR
 //!   (`rust_decimal::Decimal`, que chega como `decimal.Decimal`).
 //!
@@ -56,11 +60,13 @@ use arrow_array::{
     Array, BooleanArray, Decimal128Array, Float64Array, Int32Array, Int64Array, PrimitiveArray,
     RecordBatch, StringArray,
 };
+use arrow_schema::extension::Json as ArrowJson;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use chrono::{DateTime, Duration, NaiveDate};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3_arrow::PyRecordBatch;
+use serde_json::value::RawValue;
 use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 use rust_decimal::Decimal as RustDecimal;
 
@@ -1289,6 +1295,279 @@ fn project_nested_borrowed(py: Python<'_>, batch: PyRecordBatch) -> PyResult<Py<
     build_revenue_batch(py, out_ids, out_revenues)
 }
 
+// ---------------------------------------------------------------------------
+// JSON opaco: o tipo de extensão canônico `arrow.json`
+// ---------------------------------------------------------------------------
+//
+// Os 11 tipos do `roundtrip_all_types` cobrem o aninhamento TIPADO
+// (`struct`/`list`/`map`): a forma é conhecida, declarada no schema e validada
+// em toda camada. JSON é o outro regime — um documento de TEXTO cuja forma
+// varia por linha. No Arrow ele não é um `DataType` novo: é o tipo de extensão
+// canônico `arrow.json`, que é `utf8` de storage MAIS um marcador
+// (`ARROW:extension:name`) nos metadados do campo.
+//
+// Esse marcador é a única coisa que distingue um documento de uma string
+// qualquer, e ele se perde CALADO: os dados chegam íntegros, só a semântica
+// some. Por isso `json_column` exige o marcador em vez de aceitar `utf8` puro
+// — é a diferença entre um pipeline que quebra na hora certa e um que entrega
+// texto sem sentido lá na ponta.
+
+/// O campo Arrow de uma coluna JSON: storage `utf8` + o marcador `arrow.json`.
+fn json_field(name: &str) -> Field {
+    Field::new(name, DataType::Utf8, true).with_extension_type(ArrowJson::default())
+}
+
+/// Localiza a coluna JSON pelo nome e EXIGE o tipo de extensão `arrow.json`.
+///
+/// Recusar uma `utf8` sem marcador é deliberado: o hop mais comum a derrubá-lo
+/// é o `DuckDB -> Arrow`, que por padrão devolve a coluna `JSON` como `utf8`
+/// simples (é preciso `SET arrow_lossless_conversion = true`). Falhar aqui
+/// transforma uma perda silenciosa de semântica em erro imediato.
+fn json_column<'a>(rb: &'a RecordBatch, column: &str) -> PyResult<(usize, &'a StringArray)> {
+    let (idx, field) = rb
+        .schema_ref()
+        .column_with_name(column)
+        .ok_or_else(|| PyValueError::new_err(format!("coluna '{column}' não encontrada")))?;
+
+    if field.try_extension_type::<ArrowJson>().is_err() {
+        return Err(PyValueError::new_err(format!(
+            "coluna '{column}' não carrega o tipo de extensão 'arrow.json' \
+             (data_type={:?}, marcador={:?}). Se ela veio de um hop que \
+             descartou o marcador, restaure-o antes de chamar — no DuckDB, \
+             com 'SET arrow_lossless_conversion = true' antes de exportar.",
+            field.data_type(),
+            field.extension_type_name()
+        )));
+    }
+
+    let values = rb.column(idx).as_any().downcast_ref::<StringArray>().ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "coluna '{column}' deveria ter storage utf8, mas é {:?}",
+            rb.column(idx).data_type()
+        ))
+    })?;
+    Ok((idx, values))
+}
+
+/// Normaliza os documentos de uma coluna JSON, PRESERVANDO o marcador.
+///
+/// Cada documento é reparseado e reserializado de forma compacta. O ponto do
+/// exemplo não é a normalização em si, e sim o que ela custa: o texto de saída
+/// **não é byte-a-byte igual ao de entrada** — o whitespace some e as chaves
+/// saem ordenadas (o `serde_json::Map` default é uma `BTreeMap`). O contrato de
+/// um round-trip JSON é portanto **igualdade semântica, nunca byte-a-byte**.
+///
+/// A saída reaproveita as demais colunas do batch (`Arc` clonados, sem cópia) e
+/// substitui só a coluna JSON, com o campo reconstruído por [`json_field`] —
+/// ou seja, o Rust devolve o marcador que recebeu.
+#[pyfunction]
+fn normalize_json_column(py: Python<'_>, batch: PyRecordBatch, column: &str) -> PyResult<Py<PyAny>> {
+    use arrow_array::builder::StringBuilder;
+    use arrow_array::ArrayRef;
+
+    let rb = batch.into_inner();
+    let (idx, docs) = json_column(&rb, column)?;
+
+    let mut saida = StringBuilder::new();
+    for i in 0..rb.num_rows() {
+        if docs.is_null(i) {
+            saida.append_null();
+            continue;
+        }
+        let valor: serde_json::Value = serde_json::from_str(docs.value(i)).map_err(|e| {
+            PyValueError::new_err(format!("linha {i} da coluna '{column}' não é JSON válido: {e}"))
+        })?;
+        saida.append_value(valor.to_string());
+    }
+
+    let mut fields = rb.schema().fields().to_vec();
+    fields[idx] = Arc::new(json_field(column));
+    let mut columns = rb.columns().to_vec();
+    columns[idx] = Arc::new(saida.finish()) as ArrayRef;
+
+    let schema = Arc::new(Schema::new_with_metadata(fields, rb.schema().metadata().clone()));
+    let out = RecordBatch::try_new(schema, columns).map_err(arrow_err)?;
+    Ok(PyRecordBatch::new(out).into_pyarrow(py)?.unbind())
+}
+
+/// Achata (*shred*) uma coluna JSON opaca em colunas Arrow tipadas.
+///
+/// É a recomendação do tutorial em código: quando a forma do documento é
+/// estável, JSON deve virar colunas tipadas UMA vez, na borda — a partir daí o
+/// resto da stack só vê tipos nativos, com pruning, estatísticas e validação.
+///
+/// Espera documentos no formato
+/// `{"canal": "web", "valor": 19.90, "tags": [...], "cliente": {"id": 7}}` e
+/// produz, no lugar da coluna JSON:
+///
+/// | coluna         | tipo Arrow         | observação                              |
+/// |----------------|--------------------|-----------------------------------------|
+/// | `canal`        | `utf8`             | string opcional                         |
+/// | `valor_exato`  | `decimal128(12,2)` | do TOKEN cru, sem passar por `f64`      |
+/// | `valor_float`  | `float64`          | o mesmo campo pelo caminho degradado    |
+/// | `valor_estado` | `utf8`             | `presente` / `nulo` / `ausente`         |
+/// | `num_tags`     | `int32`            | conta os itens sem parsear cada um      |
+/// | `cliente_id`   | `int64`            | um nível de aninhamento                 |
+///
+/// Duas colunas merecem atenção:
+///
+/// - **`valor_exato` vs `valor_float`**: JSON não tem tipo decimal, então a
+///   leitura ingênua (`json.loads` no Python, `serde_json::Value` no Rust)
+///   entrega `f64` e o dinheiro deixa de ser exato. Aqui o campo é lido com
+///   [`serde_json::value::RawValue`], que guarda o **token original**, e o
+///   token vira `rust_decimal::Decimal` direto — sem float no meio. As duas
+///   colunas existem lado a lado para que a diferença seja mensurável (some
+///   cada uma e compare: ver `sum_decimal_column`).
+/// - **`valor_estado`**: JSON tem TRÊS estados onde o SQL tem um só — chave
+///   presente com valor, chave presente valendo `null`, e chave ausente. Os
+///   dois últimos colapsam em `NULL` numa extração comum (`->>` no DuckDB
+///   devolve `NULL` para ambos); esta coluna preserva a distinção.
+#[pyfunction]
+fn shred_json_column(py: Python<'_>, batch: PyRecordBatch, column: &str) -> PyResult<Py<PyAny>> {
+    use arrow_array::builder::{
+        Decimal128Builder, Float64Builder, Int32Builder, Int64Builder, StringBuilder,
+    };
+    use arrow_array::ArrayRef;
+
+    let rb = batch.into_inner();
+    let (idx, docs) = json_column(&rb, column)?;
+
+    let mut canal = StringBuilder::new();
+    let mut valor_exato =
+        Decimal128Builder::new().with_precision_and_scale(12, 2).map_err(arrow_err)?;
+    let mut valor_float = Float64Builder::new();
+    let mut valor_estado = StringBuilder::new();
+    let mut num_tags = Int32Builder::new();
+    let mut cliente_id = Int64Builder::new();
+
+    // `RawValue` guarda a FATIA de texto do valor, sem interpretá-la: é o que
+    // permite decidir por campo como converter (e preservar o token do número).
+    for i in 0..rb.num_rows() {
+        if docs.is_null(i) {
+            canal.append_null();
+            valor_exato.append_null();
+            valor_float.append_null();
+            valor_estado.append_value("ausente");
+            num_tags.append_null();
+            cliente_id.append_null();
+            continue;
+        }
+
+        let raiz: HashMap<String, &RawValue> =
+            serde_json::from_str(docs.value(i)).map_err(|e| {
+                PyValueError::new_err(format!(
+                    "linha {i} da coluna '{column}' não é um objeto JSON: {e}"
+                ))
+            })?;
+
+        // --- canal: string opcional ---
+        match raiz.get("canal") {
+            Some(raw) if raw.get().trim() != "null" => {
+                let texto: String = serde_json::from_str(raw.get()).map_err(|e| {
+                    PyValueError::new_err(format!("linha {i}: 'canal' não é string: {e}"))
+                })?;
+                canal.append_value(texto);
+            }
+            _ => canal.append_null(),
+        }
+
+        // --- valor: os três estados e os dois caminhos numéricos ---
+        match raiz.get("valor") {
+            None => {
+                valor_estado.append_value("ausente");
+                valor_exato.append_null();
+                valor_float.append_null();
+            }
+            Some(raw) if raw.get().trim() == "null" => {
+                valor_estado.append_value("nulo");
+                valor_exato.append_null();
+                valor_float.append_null();
+            }
+            Some(raw) => {
+                valor_estado.append_value("presente");
+                let token = raw.get().trim();
+                // caminho EXATO: token -> rust_decimal, sem f64 no meio
+                let mut exato = RustDecimal::from_str_exact(token).map_err(|e| {
+                    PyValueError::new_err(format!(
+                        "linha {i}: 'valor' = {token} não é um decimal válido: {e}"
+                    ))
+                })?;
+                exato = exato.round_dp(2);
+                exato.rescale(2);
+                valor_exato.append_value(exato.mantissa());
+                // caminho DEGRADADO: o mesmo token via f64, para comparação
+                let aprox: f64 = token.parse().map_err(|_| {
+                    PyValueError::new_err(format!("linha {i}: 'valor' = {token} não é numérico"))
+                })?;
+                valor_float.append_value(aprox);
+            }
+        }
+
+        // --- tags: conta os itens SEM parsear cada um ---
+        match raiz.get("tags") {
+            Some(raw) if raw.get().trim() != "null" => {
+                let itens: Vec<&RawValue> = serde_json::from_str(raw.get()).map_err(|e| {
+                    PyValueError::new_err(format!("linha {i}: 'tags' não é um array: {e}"))
+                })?;
+                num_tags.append_value(itens.len() as i32);
+            }
+            _ => num_tags.append_null(),
+        }
+
+        // --- cliente.id: um nível de aninhamento ---
+        match raiz.get("cliente") {
+            Some(raw) if raw.get().trim() != "null" => {
+                let obj: HashMap<String, &RawValue> =
+                    serde_json::from_str(raw.get()).map_err(|e| {
+                        PyValueError::new_err(format!("linha {i}: 'cliente' não é objeto: {e}"))
+                    })?;
+                match obj.get("id") {
+                    Some(v) if v.get().trim() != "null" => {
+                        let id: i64 = v.get().trim().parse().map_err(|_| {
+                            PyValueError::new_err(format!("linha {i}: 'cliente.id' não é inteiro"))
+                        })?;
+                        cliente_id.append_value(id);
+                    }
+                    _ => cliente_id.append_null(),
+                }
+            }
+            _ => cliente_id.append_null(),
+        }
+    }
+
+    // saída: as demais colunas seguem por Arc (sem cópia); a coluna JSON dá
+    // lugar às seis colunas tipadas, na mesma posição
+    let shredded: Vec<(Field, ArrayRef)> = vec![
+        (Field::new("canal", DataType::Utf8, true), Arc::new(canal.finish())),
+        (
+            Field::new("valor_exato", DataType::Decimal128(12, 2), true),
+            Arc::new(valor_exato.finish()),
+        ),
+        (Field::new("valor_float", DataType::Float64, true), Arc::new(valor_float.finish())),
+        (Field::new("valor_estado", DataType::Utf8, true), Arc::new(valor_estado.finish())),
+        (Field::new("num_tags", DataType::Int32, true), Arc::new(num_tags.finish())),
+        (Field::new("cliente_id", DataType::Int64, true), Arc::new(cliente_id.finish())),
+    ];
+
+    let mut fields: Vec<Arc<Field>> = Vec::new();
+    let mut columns: Vec<ArrayRef> = Vec::new();
+    for (j, field) in rb.schema().fields().iter().enumerate() {
+        if j == idx {
+            for (f, a) in &shredded {
+                fields.push(Arc::new(f.clone()));
+                columns.push(Arc::clone(a));
+            }
+        } else {
+            fields.push(Arc::clone(field));
+            columns.push(Arc::clone(rb.column(j)));
+        }
+    }
+
+    let schema = Arc::new(Schema::new_with_metadata(fields, rb.schema().metadata().clone()));
+    let out = RecordBatch::try_new(schema, columns).map_err(arrow_err)?;
+    Ok(PyRecordBatch::new(out).into_pyarrow(py)?.unbind())
+}
+
 /// Registro do módulo Python `etl_rust_ext._etl_rust_ext` (nome definido no
 /// `[tool.maturin]` do `pyproject.toml`); o pacote `etl_rust_ext` reexporta
 /// as funções em `python/etl_rust_ext/__init__.py`.
@@ -1301,6 +1580,8 @@ fn _etl_rust_ext(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compute_product_margin, m)?)?;
     m.add_function(wrap_pyfunction!(sum_decimal_column, m)?)?;
     m.add_function(wrap_pyfunction!(roundtrip_all_types, m)?)?;
+    m.add_function(wrap_pyfunction!(normalize_json_column, m)?)?;
+    m.add_function(wrap_pyfunction!(shred_json_column, m)?)?;
     m.add_function(wrap_pyfunction!(project_nested_materialized, m)?)?;
     m.add_function(wrap_pyfunction!(project_nested_reused, m)?)?;
     m.add_function(wrap_pyfunction!(project_nested_borrowed, m)?)?;

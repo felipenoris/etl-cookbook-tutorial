@@ -154,6 +154,21 @@ Per-project work — always operate **inside** the subproject directory:
   partition's own type. The raw SQL string form rewrites the cast itself; a
   relation or a view does not. See `examples-DuckDB/examples/26_*.py` and
   `27_*.py`.
+- **JSON is an Arrow extension type, not a `DataType`.** `arrow.json` =
+  storage `utf8` **plus** an `ARROW:extension:name` marker on the field
+  (`pa.json_()` in pyarrow, `arrow_schema::extension::Json` in Rust — needs the
+  `canonical_extension_types` feature). The marker survives Parquet (logical
+  type `JSON`), pandas, `write_dataset`, and the pyo3-arrow boundary, but
+  **`DuckDB → Arrow` drops it by default** — the column comes back as plain
+  `utf8` unless the connection sets `arrow_lossless_conversion = true`. It is a
+  *silent* loss: data intact, semantics gone. The Rust functions therefore
+  reject an unmarked `utf8` rather than guessing; `as_json_column` is the
+  explicit repair. Two consequences: JSON has **no decimal and no date type**,
+  so money/dates degrade to float/string if carried inside a document (shred
+  them into typed columns instead — `shred_json_column` reads the raw number
+  token via `serde_json`'s `RawValue` to avoid `f64`); and a JSON round-trip
+  guarantees **semantic**, never byte, equality (reparsing sorts keys and eats
+  whitespace). See `examples-rust-extension/run_json_types.py`.
 - **Network-dependent tests** are marked `@pytest.mark.network` and skipped by
   the `--no-network` flag (wired in `examples-DuckDB/tests/conftest.py`). Slow tests
   (full pipeline over `data/raw`) are marked `slow` in `examples-rust-extension`.
