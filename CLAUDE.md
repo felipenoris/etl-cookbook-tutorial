@@ -144,6 +144,16 @@ Per-project work — always operate **inside** the subproject directory:
   replacement scan makes DuckDB reenter itself, observed as either a silent
   `count = 0` or a hang. Use two connections (one produces, one consumes). See
   `examples-DuckDB/examples/24_record_batch_pipeline.py`.
+- **DuckDB relational API / `register`.** `con.read_parquet(glob)` returns a
+  lazy `DuckDBPyRelation` (a query, not a result) bound to its connection —
+  passing it to another connection raises. `con.register(name, obj)` is
+  literally `CREATE TEMP VIEW`: it shows up in `duckdb_views()`, has empty
+  `sql`, and `EXPORT DATABASE` skips it. **Hive partition columns are
+  `VARCHAR`** (`'01'`), so `rel.filter("order_month = 1")` inserts a `CAST` that
+  kills file pruning (~3x slower, measured) — compare against a literal of the
+  partition's own type. The raw SQL string form rewrites the cast itself; a
+  relation or a view does not. See `examples-DuckDB/examples/26_*.py` and
+  `27_*.py`.
 - **Network-dependent tests** are marked `@pytest.mark.network` and skipped by
   the `--no-network` flag (wired in `examples-DuckDB/tests/conftest.py`). Slow tests
   (full pipeline over `data/raw`) are marked `slow` in `examples-rust-extension`.
