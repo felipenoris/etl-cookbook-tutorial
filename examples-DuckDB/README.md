@@ -68,6 +68,8 @@ uv sync
 | `23_surrogate_keys_returning.py` | chaves primárias sequenciais (surrogate keys): `CREATE SEQUENCE` + `DEFAULT nextval` (não há `IDENTITY`), `RETURNING` para resgatar as chaves geradas em lote, tradução natural→surrogate no fato, carga incremental por anti-join |
 | `24_record_batch_pipeline.py` | `to_arrow_reader` (o antigo `fetch_record_batch`): lote entra / lote sai sem sair do Arrow, no mesmo formato das funções do Rust; buffers reaproveitados por referência (prova por endereço), estado entre lotes, e o reader do Python devolvido ao DuckDB por replacement scan |
 | `25_metadata_introspection.py` | introspecção sem ler dados: `parquet_schema` (tipo físico vs lógico), `parquet_file_metadata` (footer), `parquet_metadata` (row group × coluna: compressão, encoding, nulos), `parquet_kv_metadata`; o lado catálogo (`DESCRIBE`, `duckdb_columns`, `information_schema`, `.description`) e um detector de schema drift entre partições, com `union_by_name` reconciliando o caso benigno |
+| `26_relational_api_read_parquet.py` | `con.read_parquet()` devolve uma `DuckDBPyRelation` **lazy**: montagem condicional da query em Python (`.filter`/`.project`/`.aggregate`/`.join`), `.sql_query()` e `.query()` como pontes com o SQL, ausência de cache, e a pegadinha medida (6×) do **cast implícito na coluna de partição** matando o pruning |
+| `27_register_relations_and_dataframes.py` | `con.register()` **é** `CREATE TEMP VIEW`, provado pelo catálogo (`duckdb_views`, `information_schema`), pelo plano e pelo comportamento; as 3 diferenças (temporária, sem texto SQL, escopo de conexão); registrar `pandas.DataFrame`/`pyarrow.Table` e consultá-los por SQL; snapshot lógico via copy-on-write; `unregister`; `register` vs replacement scan |
 
 ## Glossário: comandos além do SQL transacional básico
 
@@ -187,6 +189,7 @@ Não existe cópia implícita:
 | --- | --- |
 | `SELECT * FROM 'arq.parquet'` | lê direto do arquivo; **zero cópia**, zero estado no `.duckdb` |
 | `CREATE VIEW v AS SELECT * FROM 'arq.parquet'` | guarda só o **texto da consulta** no catálogo; o parquet é relido a cada query |
+| `con.register('v', con.read_parquet('arq.parquet'))` | o mesmo que a linha acima, como **view temporária** — sem cópia (exemplo 27) |
 | `CREATE TABLE t AS SELECT * FROM 'arq.parquet'` | **copia**, convertendo para o formato colunar nativo dentro do `.duckdb` |
 | `COPY t FROM 'arq.parquet'` | idem — ingere de fato |
 
@@ -317,6 +320,84 @@ medido no exemplo: `DESCRIBE` do glob inteiro em ~3 ms e `sum(num_rows)` pelo
 footer em ~2 ms, contra dezenas a centenas de ms para varrer **uma só** coluna.
 Toda pergunta sobre estrutura — colunas, tipos, contagem, nulos, tamanho —
 deve ser respondida pelo footer, nunca por uma varredura.
+
+## API relacional e `register`: dar nome a objetos Python (exemplos 26 e 27)
+
+Além da string SQL, o DuckDB expõe a leitura de parquet como **método da
+conexão**: `con.read_parquet(glob, hive_partitioning=True)` devolve uma
+`DuckDBPyRelation`. Ela **não é o resultado** — é a consulta ainda não
+executada, a mesma coisa que `con.sql("SELECT ...")` devolve. Tanto que
+`rel.sql_query()` imprime o `SELECT` equivalente.
+
+O motivo de existir é a **montagem condicional**: em Python a query costuma
+depender de argumentos (`--mes`, `--status`), e montá-la concatenando SQL é
+frágil e abre porta para injeção (exemplo 22). Com a relation, cada passo é um
+método que devolve uma nova relation, e nada executa até o `.fetchall()` do
+fim — o otimizador ainda vê a consulta inteira de uma vez.
+
+```python
+rel = con.read_parquet(ORDERS_GLOB, hive_partitioning=True)
+if mes:
+    rel = rel.filter(f"order_month = '{mes:02d}'")
+rel = rel.aggregate("status, count(*) AS n", "status")   # ainda nada foi lido
+```
+
+**A pegadinha que custa 6× (medida no exemplo 26).** As colunas de partição vêm
+do *nome do diretório*, então `order_month` é `VARCHAR` (`'01'`). Escrever
+`filter("order_month = 1")` insere um `CAST(order_month AS INTEGER)`, e o
+descarte de arquivos não sabe avaliar essa expressão: os 6 arquivos são abertos
+e o filtro vira um operador `FILTER`. Com o literal no tipo nativo o plano
+volta a mostrar `Scanning Files: 1/6`.
+
+| Filtro | Tempo | Arquivos lidos |
+| --- | --- | --- |
+| `rel.filter("order_month = 1")` | ~12 ms | 6 de 6 |
+| `rel.filter("order_month = '01'")` | ~4 ms | **1 de 6** |
+| `... WHERE order_month = 1` (string SQL) | ~3 ms | 1 de 6 |
+
+> **Regra:** na API relacional, compare coluna de partição com literal **do
+> tipo dela**. Na string SQL o otimizador reescreve o cast sozinho; passando por
+> uma relation (ou por uma view — vale para as duas), não.
+
+**`con.register(nome, objeto)` é `CREATE TEMP VIEW`,** não algo parecido com
+isso. O exemplo 27 prova pelos três lados:
+
+- **catálogo** — o nome registrado aparece em `duckdb_views()` ao lado das views
+  de DDL, e `information_schema.tables` classifica ambos como `VIEW`;
+- **plano** — mesmos pushdowns, mesmo partition pruning e até a *mesma*
+  patologia do cast acima, número por número;
+- **comportamento** — nenhum dos dois materializa: os dois releem a fonte a cada
+  consulta e enxergam arquivos que apareceram no diretório depois (o `CTAS`,
+  não).
+
+As diferenças são de **ciclo de vida**, não de semântica:
+
+| | `con.register` | `CREATE VIEW` |
+| --- | --- | --- |
+| `temporary` no catálogo | `true` (morre com a conexão) | `false` |
+| texto SQL guardado | vazio — é um ponteiro para objeto Python | o DDL completo |
+| `EXPORT DATABASE` | **ignora silenciosamente** | exporta no `schema.sql` |
+| fonte possível | relation, `DataFrame`, `pyarrow.Table`, reader | só SQL |
+
+Registrar um `pandas.DataFrame`/`pyarrow.Table` transforma **memória Python em
+tabela SQL**, sem cópia: `JOIN` com parquet, `GROUP BY`, tudo direto. E com o
+copy-on-write do pandas 3 o nome registrado vira um **snapshot lógico de
+graça** — escrever no DataFrame aloca buffers novos e não muda o que o SQL vê;
+para publicar, basta registrar de novo com o mesmo nome.
+
+**`register` vs. replacement scan.** `SELECT * FROM meu_df` já funciona sem
+registrar nada (exemplo 5), mas o replacement scan resolve o nome no *frame de
+quem chamou* `.sql()` — some junto com o frame. `register` é a versão explícita:
+você escolhe o nome, ele sobrevive ao `return`, aparece no catálogo e sai com
+`con.unregister(nome)`. É por isso que funções e bibliotecas usam `register`.
+
+**Materializar nem sempre ganha.** Medido no exemplo 27, sobre `orders` de
+janeiro: o nome registrado (view sobre parquet) roda a agregação em ~36 ms,
+contra ~85 ms da mesma tabela materializada por `CTAS`. O parquet guarda
+`status` em `RLE_DICTIONARY` + snappy e o pruning restringe a leitura a 1
+arquivo; a tabela do banco **em memória** não é comprimida, então o scan move
+mais bytes. Materializar compensa quando a query encapsulada é cara (join,
+sort, UDF) ou quando a fonte é remota (S3) — não pelo fato de "estar no banco".
 
 ## Performance sem índices (exemplo 12)
 
