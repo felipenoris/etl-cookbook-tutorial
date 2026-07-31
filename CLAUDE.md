@@ -134,7 +134,16 @@ Per-project work — always operate **inside** the subproject directory:
 - **Rust extension pattern.** The `#[pyfunction]` in `src/lib.rs` takes all
   arguments explicitly; a thin same-named Python wrapper in
   `python/etl_rust_ext/__init__.py` supplies defaults and the docstring. After
-  any change to `src/lib.rs`, run `uv sync` (or `uv run ...`) to recompile.
+  any change to `src/lib.rs`, recompile with `uv sync --reinstall-package
+  etl-rust-ext` — **plain `uv sync` and `uv run` do not rebuild**: `uv` watches
+  the package metadata, not the Rust source, so a changed `src/lib.rs` leaves
+  the previously built `python/etl_rust_ext/_etl_rust_ext.*.so` in place. The
+  stale `.so` either breaks pytest collection with `ImportError` on a
+  newly added symbol, or — worse — passes green against the old binary when
+  only a function body changed. `check-all.sh` step 5 therefore always
+  reinstalls (~9s warm). Note that `clean-all.sh` must delete that `.so`
+  explicitly: it lives outside `target/`, so `cargo clean` misses it and
+  maturin has no `clean` subcommand.
 - **DuckDB → Arrow streaming.** Use `to_arrow_reader(n)` (from either
   `con.execute(sql)` or `con.sql(sql)` — same `pyarrow.RecordBatchReader`
   class); `fetch_record_batch(n)` is the same method under its old name and
