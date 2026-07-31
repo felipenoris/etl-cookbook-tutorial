@@ -29,8 +29,13 @@ step 2/5 "Documentação gerada (examples-rust-extension/docs)"
 rm -rf examples-rust-extension/docs
 echo "removida"
 
-step 3/5 "Build Rust (examples-rust-extension/target: extensão compilada + cargo doc)"
+step 3/5 "Build Rust (examples-rust-extension: target/ + extensão instalada em python/)"
 (cd examples-rust-extension && cargo clean 2>/dev/null) || rm -rf examples-rust-extension/target
+# O .so que o maturin instala em modo editable vive FORA de target/ (o .venv o
+# alcança por um .pth apontando para python/), e o `cargo clean` não chega lá —
+# o maturin, por sua vez, não tem subcomando `clean`. Sem este rm o script não
+# cumpre o que promete: um clone recém-feito não tem .so nenhum.
+rm -f examples-rust-extension/python/etl_rust_ext/*.so
 echo "removido"
 
 step 4/5 "Caches de teste e bytecode (__pycache__, .pytest_cache)"

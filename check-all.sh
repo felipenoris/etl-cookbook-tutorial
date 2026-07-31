@@ -44,7 +44,14 @@ step 3/9 "pyarrow: suíte pytest (13 exemplos)"
 step 4/9 "DuckDB: suíte pytest (27 exemplos)"
 (cd examples-DuckDB && uv run pytest $DUCKDB_FLAGS)
 
-step 5/9 "rust-extension: suíte pytest (compila a extensão via maturin no 1º uso)"
+step 5/9 "rust-extension: recompila a extensão via maturin e roda a suíte pytest"
+# O --reinstall-package não é zelo excessivo: o uv NÃO observa src/lib.rs, só os
+# metadados do pacote. Nem `uv sync` nem `uv run` recompilam depois de o fonte
+# Rust mudar (por edição ou por `git pull`), e a suíte passaria a exercitar um
+# .so defasado — quebrando na coleta se o fonte ganhou um símbolo novo, ou, pior,
+# ficando verde contra o binário antigo se apenas o corpo de uma função mudou.
+# Com target/ quente a recompilação custa ~9s; a frio, ~47s.
+(cd examples-rust-extension && uv sync --reinstall-package etl-rust-ext)
 (cd examples-rust-extension && uv run pytest)
 
 step 6/9 "ETL completo (DuckDB -> pyarrow -> Rust -> pandas -> parquet)"
