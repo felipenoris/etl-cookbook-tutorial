@@ -38,26 +38,34 @@ procedures; tem dois mecanismos mais simples, cada um com seu lugar:
 **Medição com controle** (a MESMA lógica de desconto sobre 5,6M de linhas,
 incluindo uma consulta *sem* UDF para isolar o custo do scan+join):
 
-| Abordagem | Tempo total | Custo da lógica | vs SQL puro |
-|---|---|---|---|
-| controle: scan+join+`SUM`, sem UDF | ~0,01s | — | — |
-| **SQL puro** (`CASE WHEN`) | ~0,02s | ~0,01s | **1x** |
-| UDF `native` (valor a valor) | ~0,35s | ~0,34s | **~30x mais lento** |
-| UDF `arrow` (vetorizada) | ~0,57s | ~0,56s | **~50x mais lento** |
+| Abordagem | Tempo total | vs SQL puro (total) |
+|---|---|---|
+| controle: scan+join+`SUM`, sem UDF | ~0,01s | — |
+| **SQL puro** (`CASE WHEN`) | ~0,02s | **1x** |
+| UDF `native` (valor a valor) | ~0,36s | **~17x mais lento** |
+| UDF `arrow` (vetorizada) | ~0,57s | **~26x mais lento** |
+
+A razão da última coluna é sobre os tempos **totais** — a mesma que o script
+imprime ao final. Dá para descontar o controle e comparar só o custo marginal
+da lógica (~34x e ~56x), mas essa conta divide duas diferenças de milissegundos
+e a margem de erro fica grande; os totais são o número honesto de citar.
 
 Duas conclusões, e a ordem entre elas importa:
 
 1. **O custo dominante é SAIR do motor** — não o estilo em que a UDF é
-   escrita. Qualquer UDF Python custa 20–50x o equivalente em SQL puro.
-   Antes de escolher entre `native` e `arrow`, pergunte se a lógica não cabe
-   num `CASE WHEN`, num operador aritmético ou numa window function.
+   escrita. Qualquer UDF Python custa mais de uma ordem de grandeza sobre o
+   equivalente em SQL puro. Antes de escolher entre `native` e `arrow`,
+   pergunte se a lógica não cabe num `CASE WHEN`, num operador aritmético ou
+   numa window function.
 2. **Entre as duas variantes, a diferença é modesta** — e aqui a `native`
    ganha (~1,6x). Isso contraria a intuição de "uma chamada Python por
    linha seria ordens de grandeza pior": o DuckDB amortiza o overhead
    processando vetores internamente, enquanto a `arrow` paga alocação de
    arrays intermediários a cada kernel do `pyarrow.compute` (`greater`,
-   `multiply`, `if_else`...). Com função mais pesada por linha (raiz, log,
-   polinômio) a `arrow` passa à frente, mas por ~10%.
+   `multiply`, `if_else`...). Com função bem mais pesada por linha (raiz, log,
+   polinômio) a expectativa é que a `arrow` passe à frente, já que o custo do
+   kernel se dilui — mas este exemplo não mede esse caso, então trate como
+   hipótese a verificar, não como resultado.
 
 **A lição prática**: use SQL sempre que a lógica for expressável nele; recorra
 a UDF Python quando não for, escolhendo a variante pela clareza (a diferença

@@ -342,7 +342,7 @@ if mes:
 rel = rel.aggregate("status, count(*) AS n", "status")   # ainda nada foi lido
 ```
 
-**A pegadinha que custa 6× (medida no exemplo 26).** As colunas de partição vêm
+**A pegadinha que lê 6 arquivos em vez de 1 (medida no exemplo 26).** As colunas de partição vêm
 do *nome do diretório*, então `order_month` é `VARCHAR` (`'01'`). Escrever
 `filter("order_month = 1")` insere um `CAST(order_month AS INTEGER)`, e o
 descarte de arquivos não sabe avaliar essa expressão: os 6 arquivos são abertos
@@ -351,9 +351,14 @@ volta a mostrar `Scanning Files: 1/6`.
 
 | Filtro | Tempo | Arquivos lidos |
 | --- | --- | --- |
-| `rel.filter("order_month = 1")` | ~12 ms | 6 de 6 |
-| `rel.filter("order_month = '01'")` | ~4 ms | **1 de 6** |
-| `... WHERE order_month = 1` (string SQL) | ~3 ms | 1 de 6 |
+| `rel.filter("order_month = 1")` | ~4 ms | 6 de 6 |
+| `rel.filter("order_month = '01'")` | ~2 ms | **1 de 6** |
+| `... WHERE order_month = 1` (string SQL) | ~1 ms | 1 de 6 |
+
+Os tempos são de uma máquina de referência e estão na casa do milissegundo —
+cite a **coluna da direita**, que é o efeito estrutural e não varia: com o
+cast, o descarte por arquivo não acontece. A penalidade em tempo depende do
+que mais a consulta faz e cresce com a seletividade do filtro.
 
 > **Regra:** na API relacional, compare coluna de partição com literal **do
 > tipo dela**. Na string SQL o otimizador reescreve o cast sozinho; passando por
@@ -392,8 +397,8 @@ você escolhe o nome, ele sobrevive ao `return`, aparece no catálogo e sai com
 `con.unregister(nome)`. É por isso que funções e bibliotecas usam `register`.
 
 **Materializar nem sempre ganha.** Medido no exemplo 27, sobre `orders` de
-janeiro: o nome registrado (view sobre parquet) roda a agregação em ~36 ms,
-contra ~85 ms da mesma tabela materializada por `CTAS`. O parquet guarda
+janeiro: o nome registrado (view sobre parquet) roda a agregação em ~8 ms,
+contra ~13 ms da mesma tabela materializada por `CTAS`. O parquet guarda
 `status` em `RLE_DICTIONARY` + snappy e o pruning restringe a leitura a 1
 arquivo; a tabela do banco **em memória** não é comprimida, então o scan move
 mais bytes. Materializar compensa quando a query encapsulada é cara (join,
