@@ -68,7 +68,7 @@ uv sync
 | `23_surrogate_keys_returning.py` | chaves primárias sequenciais (surrogate keys): `CREATE SEQUENCE` + `DEFAULT nextval` (não há `IDENTITY`), `RETURNING` para resgatar as chaves geradas em lote, tradução natural→surrogate no fato, carga incremental por anti-join |
 | `24_record_batch_pipeline.py` | `to_arrow_reader` (o antigo `fetch_record_batch`): lote entra / lote sai sem sair do Arrow, no mesmo formato das funções do Rust; buffers reaproveitados por referência (prova por endereço), estado entre lotes, e o reader do Python devolvido ao DuckDB por replacement scan |
 | `25_metadata_introspection.py` | introspecção sem ler dados: `parquet_schema` (tipo físico vs lógico), `parquet_file_metadata` (footer), `parquet_metadata` (row group × coluna: compressão, encoding, nulos), `parquet_kv_metadata`; o lado catálogo (`DESCRIBE`, `duckdb_columns`, `information_schema`, `.description`) e um detector de schema drift entre partições, com `union_by_name` reconciliando o caso benigno |
-| `26_relational_api_read_parquet.py` | `con.read_parquet()` devolve uma `DuckDBPyRelation` **lazy**: montagem condicional da query em Python (`.filter`/`.project`/`.aggregate`/`.join`), `.sql_query()` e `.query()` como pontes com o SQL, ausência de cache, e a pegadinha medida (6×) do **cast implícito na coluna de partição** matando o pruning |
+| `26_relational_api_read_parquet.py` | `con.read_parquet()` devolve uma `DuckDBPyRelation` **lazy**: montagem condicional da query em Python (`.filter`/`.project`/`.aggregate`/`.join`), `.sql_query()` e `.query()` como pontes com o SQL, ausência de cache, e a pegadinha medida do **cast implícito na coluna de partição** matando o pruning (lê os 6 arquivos em vez de 1) |
 | `27_register_relations_and_dataframes.py` | `con.register()` **é** `CREATE TEMP VIEW`, provado pelo catálogo (`duckdb_views`, `information_schema`), pelo plano e pelo comportamento; as 3 diferenças (temporária, sem texto SQL, escopo de conexão); registrar `pandas.DataFrame`/`pyarrow.Table` e consultá-los por SQL; snapshot lógico via copy-on-write; `unregister`; `register` vs replacement scan |
 
 ## Glossário: comandos além do SQL transacional básico
@@ -316,8 +316,9 @@ aceita tanto um nome de tabela quanto uma query — inclusive
 set vem de graça em `con.execute(sql).description` (DBAPI).
 
 **A ordem de grandeza.** Sobre as 6 partições de `orders` (33,7M de linhas),
-medido no exemplo: `DESCRIBE` do glob inteiro em ~3 ms e `sum(num_rows)` pelo
-footer em ~2 ms, contra dezenas a centenas de ms para varrer **uma só** coluna.
+medido no exemplo: `DESCRIBE` do glob inteiro em ~1 ms e `sum(num_rows)` pelo
+footer em ~1 ms, contra ~14 ms para varrer **uma só** coluna — uma ordem de
+grandeza, e a distância cresce com o volume, porque o footer não depende dele.
 Toda pergunta sobre estrutura — colunas, tipos, contagem, nulos, tamanho —
 deve ser respondida pelo footer, nunca por uma varredura.
 

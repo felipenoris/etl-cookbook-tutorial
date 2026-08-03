@@ -63,9 +63,12 @@ Dois detalhes que o exemplo 12 mede sobre os dados reais:
   **precisa ser ligado na escrita** (`bloom_filter_options` do `write_table`) e
   fica gravado dentro do arquivo, a um custo em disco que o exemplo quantifica.
   Aqui os dois writers da stack divergem: no **pyarrow** o bloom é *opt-in* por
-  coluna, enquanto o **DuckDB** (`COPY … FORMAT parquet`) o grava
-  automaticamente, mas só quando os distintos por row group são ≤ 20% das linhas
-  — logo, pula colunas quase-únicas (medições na Parte B do exemplo 12).
+  coluna — é o que a Parte B do exemplo 12 mede, incluindo o custo em bytes.
+  Já o **DuckDB** (`COPY … FORMAT parquet`) o grava automaticamente, mas só
+  quando os distintos por row group são ≤ 20% das linhas, logo pula colunas
+  quase-únicas. Esse limiar não é medido pelo exemplo (o projeto `pyarrow` não
+  depende do DuckDB); é comportamento do writer do DuckDB, verificado à parte
+  em 1.5.5 — o bloom aparece em 20,0% de distintos e some em 21,0%.
 - **As estatísticas `min`/`max`/`null_count` vêm ligadas por padrão**
   (`write_statistics=True`), então o predicate pushdown funciona "de graça" na
   maioria dos parquets — só se perde se alguém escrever com
