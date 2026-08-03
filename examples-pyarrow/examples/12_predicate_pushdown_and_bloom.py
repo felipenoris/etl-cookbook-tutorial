@@ -176,8 +176,12 @@ if __name__ == "__main__":
     #   (COPY)       parâmetro. Mas por uma heurística de cardinalidade POR row
     #                group: só escreve o filtro quando os valores distintos na row
     #                group são <= 20% das linhas dela; acima disso, OMITE.
-    #                (Corte medido em 20% exatos, escalando com ROW_GROUP_SIZE; em
-    #                DuckDB 1.5.4 não há setting nem opção de COPY para mudar isso.)
+    #                (Corte medido em 20% exatos, escalando com ROW_GROUP_SIZE:
+    #                com 100k linhas por row group o bloom aparece em 20,000
+    #                distintos e some em 21,000. Reconferido em DuckDB 1.5.5, que
+    #                segue sem setting ou opção de COPY para mudar isso. A medição
+    #                é externa a este exemplo: o projeto pyarrow não depende do
+    #                DuckDB — para reproduzir, use examples-DuckDB.)
     #
     # Consequência que inverte a intuição "bloom = alta cardinalidade": o DuckDB
     # PULA o bloom nas colunas quase-únicas. Os MESMOS dados deste exemplo,
