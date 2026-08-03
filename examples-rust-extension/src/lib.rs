@@ -621,16 +621,21 @@ impl BoundedRevenueProjector {
         Ok(self.submitted)
     }
 
+    /// Tamanho do pool de workers efetivamente em uso (o default é o número de
+    /// núcleos da máquina, então vale conferir o valor resolvido).
     #[getter]
     fn num_workers(&self) -> usize {
         self.num_workers
     }
 
+    /// Capacidade da fila de entrada — o teto de lotes que podem esperar por um
+    /// worker, e portanto o que limita o pico de memória junto com `num_workers`.
     #[getter]
     fn queue_depth(&self) -> usize {
         self.queue_depth
     }
 
+    /// Quantidade de lotes submetidos desde a criação (não zera no `finish`).
     fn batches_submitted(&self) -> usize {
         self.submitted
     }

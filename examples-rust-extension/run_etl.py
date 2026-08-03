@@ -160,6 +160,7 @@ def write_rich_output(table: pa.Table) -> None:
 
 
 def main() -> None:
+    """Roda o pipeline completo em 5 etapas, imprimindo o progresso de cada uma."""
     print("[1/5] extraindo e juntando orders+customers+products via DuckDB (com spill)...")
     joined = extract_and_join_with_duckdb()
     print(f"      {joined.num_rows:,} linhas após o join")

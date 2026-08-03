@@ -75,6 +75,7 @@ MEMORY_LIMIT = "60MB"     # teto apertado: a reorganização deve caber mesmo as
 
 
 def section(title: str) -> None:
+    """Imprime um título de seção, separando as etapas na saída do script."""
     print(f"\n{'=' * 10} {title} {'=' * 10}")
 
 
@@ -192,6 +193,7 @@ def reorganizar_para_upstream(
 
 
 def main() -> None:
+    """Gera a saída (desordenada) do estágio paralelo e mede o ganho da reorganização."""
     workdir = Path(tempfile.mkdtemp(prefix="reorg_upstream_"))
     fonte = workdir / "contratos.parquet"
     paralelo = workdir / "receitas_paralelo.parquet"     # saída do estágio paralelo (desordenada)

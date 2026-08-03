@@ -115,6 +115,9 @@ o "sort global" vira "sort local por partição", paralelizável de novo.
   via spill, deixando-a pronta para o `COPY` do Redshift.
 - `run_data_types` — roundtrip de tipos Arrow entre Python e Rust (inteiros, decimais,
   datas, aninhados).
+- `run_json_types` — o regime do JSON **opaco**: o tipo de extensão `arrow.json`
+  atravessando parquet → DuckDB → Arrow → Rust, onde o marcador se perde e como
+  *shreddar* dinheiro e datas em colunas tipadas.
 - `run_nested_params` — materialização 1:N sobre `ListArray` (um contrato com N
   parâmetros).
 - `docs_demo` — vitrine dos recursos de documentação do pdoc: fórmulas (`--math`),
