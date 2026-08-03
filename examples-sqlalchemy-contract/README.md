@@ -41,11 +41,16 @@ uv run examples/04_orm_vs_batch.py       # aceita [n_contas] [lanc_por_conta]
 
 ## O placar do exemplo 02 (100k lançamentos, SQLite em memória)
 
-| Caminho | Tempo | Vazão |
-| --- | --- | --- |
-| ORM (objetos + session + commit) | ~2.0s | ~50k linhas/s |
-| SQLAlchemy Core (executemany) | ~0.3s | ~320k linhas/s |
-| Colunar (Arrow → parquet → DuckDB CTAS) | ~0.02s | **~4.3M linhas/s** |
+| Caminho | Tempo | Vazão | vs ORM |
+| --- | --- | --- | --- |
+| ORM (objetos + session + commit) | ~2.2s | ~45k linhas/s | 1x |
+| SQLAlchemy Core (executemany) | ~0.3s | ~310k linhas/s | ~7x |
+| Colunar (Arrow → parquet → DuckDB CTAS) | ~0.04s | **~2.3M linhas/s** | **~50x** |
+
+Os tempos absolutos variam com a máquina — o script imprime a razão medida na
+sua ao final, e é ela que vale citar. O que é estável é a ordem: o passo de
+ORM para Core vale um fator pequeno, e o de Core para colunar, uma ordem de
+grandeza.
 
 O SQLite em memória é o cenário MAIS favorável ao ORM (sem rede, sem fsync);
 contra um Postgres real a diferença só cresce. A lentidão não é má
@@ -70,11 +75,41 @@ equivalente em Rust](../examples-rust-extension/run_nested_params.py):
 | 4 | **Execução interpretada** — cada operação é dispatch de bytecode | todo laço Python sobre linhas |
 | 5 | **Alocação de heap por linha** | criar objetos/listas por registro |
 
-A observação central do estudo em Rust: **quatro desses cinco custos
-desaparecem só por sair do Python** — sobra a alocação (~100x mais barata, e
-evitável emprestando fatias sobre os buffers Arrow). É por isso que a mesma
-lição "não processe linha a linha" custa ~4x lá e duas ordens de grandeza
-aqui.
+### Quem elimina cada custo: a stack ou a linguagem?
+
+Aqui mora a confusão mais comum ao ler os números deste projeto. São **duas
+trocas independentes**, e elas eliminam custos diferentes:
+
+- **Troca 1 — sair do ORM+banco para Arrow/colunar**, continuando em Python.
+- **Troca 2 — descer para Rust**, quando a lógica não couber num motor
+  vetorizado.
+
+| # | Custo | Troca 1 (ORM → Arrow, em Python) | Troca 2 (Python → Rust) |
+| --- | --- | --- | --- |
+| 1 | Metadados por linha (`PyObject`) | **Quase todo** — saem `__dict__`, *descriptors* e identity map; sobra o `PyObject` da tupla | **O resíduo** — struct Rust é memória pura |
+| 2 | Escrituração do ORM | **Todo** — é literalmente o que se abandona | já eliminado |
+| 3 | Travessia de fronteira por linha | **Todo** — o dado vem de um buffer em memória, não de round trips | já eliminado |
+| 4 | Execução interpretada | **Todo, se a lógica vetorizar** — o laço passa a rodar dentro do DuckDB/kernels Arrow, em C++ | **Todo**, inclusive quando *não* vetoriza |
+| 5 | Alocação de heap por linha | dentro do motor, não existe | **sobrevive** (~100x mais barata; só some emprestando fatias) |
+
+Duas leituras importantes:
+
+**A maior parte do ganho não exige trocar de linguagem.** Os custos 2 e 3 —
+os especificamente *do ORM* — saem inteiros na Troca 1, ainda em Python. É o
+que o degrau 3 do exemplo 04 mede: ~32x sem uma linha de Rust.
+
+**O Rust não é o degrau seguinte do mesmo eixo; é a saída para outro
+problema.** Se a lógica vetoriza, o motor colunar já resolve o custo 4 e não
+há o que o Rust acrescente. O Rust entra quando a lógica **não** vetoriza —
+dependência sequencial entre linhas, estado que atravessa o laço — como no
+[laço com estado do pandas](../examples-pandas/examples/10_sequential_stateful_loop.py).
+
+Por isso os fatores dos dois estudos **não são comparáveis**: os ~4x do
+[estudo em Rust](../examples-rust-extension/run_nested_params.py) isolam só a
+estratégia de alocação (custo 5, dentro do Rust), enquanto o ~95x daqui
+acumula ORM, N+1 e laço interpretado. O par estritamente comparável é o degrau
+3 → 4 deste README (~3x): ambos medem "parar de processar linha a linha",
+mantida a linguagem.
 
 ## O gradiente do exemplo 04 (200k lançamentos, agregação por conta)
 
@@ -85,15 +120,17 @@ degrau eliminando custos da tabela acima:
 
 | Estratégia | Tempo | Ganho acumulado | Custos que o degrau elimina |
 | --- | --- | --- | --- |
-| 1. ORM lazy loading (N+1) | ~9,7s | 1x | — (paga todos os cinco) |
-| 2. ORM eager (`selectinload`) | ~2,4s | **~4x** | **3** — as N idas ao banco |
-| 3. Linhas brutas + laço Python | ~0,3s | **~33x** | **1 e 2** — objetos e escrituração |
-| 4. Lote colunar (DuckDB) | ~0,04s | **~258x** | **4 e 5** — laço interpretado e alocação |
+| 1. ORM lazy loading (N+1) | ~9,9s | 1x | — (paga todos os cinco) |
+| 2. ORM eager (`selectinload`) | ~2,5s | **~4x** | **3** — as N idas ao banco |
+| 3. Linhas brutas + laço Python | ~0,3s | **~32x** | **2 e a maior parte de 1** — escrituração e objetos ORM (a tupla ainda é um `PyObject`) |
+| 4. Lote colunar (DuckDB) | ~0,1s | **~95x** | **4 e 5** — laço interpretado e alocação |
 
-Nenhum degrau é o vilão sozinho: o N+1 custa 4x, os objetos ORM mais 8x, e o
-laço interpretado mais 7x. Note que os degraus 2 e 3 são exatamente os custos
-que o ORM adiciona; o degrau 4 é o custo do **Python** — e por isso ele só sai
-indo para um motor vetorizado (ou para o Rust, como no estudo equivalente).
+Nenhum degrau é o vilão sozinho: o N+1 custa ~4x, os objetos ORM mais ~8x, e o
+laço interpretado mais ~3x. Os degraus 2 e 3 são a **Troca 1** da seção
+anterior — saem os custos do ORM, sem sair do Python. O degrau 4 é a
+vetorização: o laço deixa de ser interpretado porque passa a rodar dentro do
+motor. Note que os três primeiros degraus somam ~32x **sem trocar de
+linguagem** — o Rust não aparece em nenhum deles.
 
 **Ressalva**: com pouco volume (~15k linhas) a estratégia 4 fica *mais lenta*
 que a 3 — o custo fixo do DuckDB (conexão, planejamento) não se paga. A

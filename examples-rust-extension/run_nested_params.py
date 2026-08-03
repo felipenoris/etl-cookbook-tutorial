@@ -14,17 +14,26 @@ e o exemplo mede a diferença entre as três estratégias possíveis.
 A lentidão do ORM não vem de "materializar objetos" em abstrato, mas de cinco
 custos distintos. Vale checar quais deles atravessam para o lado Rust:
 
-| Custo do ORM | Sobrevive em Rust? |
-|---|---|
-| **Metadados por linha em runtime** — cada instância é um `PyObject` com refcount, `__dict__` e rastreamento de GC (centenas de bytes de overhead por objeto) | **Não.** Uma struct Rust é memória pura: sem refcount, sem GC, sem dicionário de atributos |
-| **Escrituração do ORM** — identity map, unit of work, atributos instrumentados (todo acesso passa por *descriptors* que registram estado), lazy loading | **Não.** Não existe nada disso; é só dado |
-| **Travessia de fronteira por linha** — o flush serializa linha a linha pelo protocolo do banco | **Não.** Os dados já estão na memória do processo; montar a struct é leitura de RAM, não I/O |
-| **Execução interpretada** — cada operação é dispatch de bytecode | **Não.** Código de máquina, inlinável e vetorizável |
-| **Alocação de heap por linha** | **SIM — é o único que sobrevive, e o que este exemplo mede** |
+A coluna da direita é a que costuma ser lida errado: nem todo custo que some
+some **por causa do Rust**. Vale separar quem elimina o quê.
 
-Quatro dos cinco custos desaparecem só por sair do Python. O quinto — alocar
-memória por linha — continua existindo em Rust (~100x mais barato, mas ainda
-O(n)), e é evitável. Há ainda um custo extra que não tem relação com GC:
+| Custo do ORM | Sobrevive aqui? | Quem de fato o elimina |
+|---|---|---|
+| **Metadados por linha em runtime** — cada instância é um `PyObject` com refcount, `__dict__` e rastreamento de GC (centenas de bytes de overhead por objeto) | **Não.** Uma struct Rust é memória pura: sem refcount, sem GC, sem dicionário de atributos | **Rust** (o resíduo). Sair do ORM já corta a maior parte — `__dict__`, *descriptors*, identity map —, mas em Python sobra o `PyObject` da tupla |
+| **Escrituração do ORM** — identity map, unit of work, atributos instrumentados (todo acesso passa por *descriptors* que registram estado), lazy loading | **Não.** Não existe nada disso; é só dado | **Sair do ORM** — não o Rust. Um ORM em Rust (Diesel, SeaORM) paga escrituração equivalente |
+| **Travessia de fronteira por linha** — o flush serializa linha a linha pelo protocolo do banco | **Não.** Os dados já estão na memória do processo; montar a struct é leitura de RAM, não I/O | **A stack Arrow** — não o Rust. O dado vem de um buffer em memória em vez de round trips; um programa Rust conversando linha a linha com um Postgres pagaria os mesmos |
+| **Execução interpretada** — cada operação é dispatch de bytecode | **Não.** Código de máquina, inlinável e vetorizável | **Rust** — ou um motor vetorizado (DuckDB, kernels do Arrow), que resolve o mesmo sem trocar de linguagem |
+| **Alocação de heap por linha** | **SIM — é o único que sobrevive, e o que este exemplo mede** | Ninguém, de graça: sobrevive em Rust (~100x mais barato, mas ainda O(n)) e só some emprestando fatias |
+
+Ou seja: **dois dos cinco custos somem por sair do Python** (metadados de
+objeto e execução interpretada) e **dois somem por abandonar o ORM e o banco
+no caminho de dados** — o que dá para fazer sem trocar de linguagem, e é
+exatamente o que o degrau "linhas brutas" do
+[`../examples-sqlalchemy-contract/examples/04_orm_vs_batch.py`](../examples-sqlalchemy-contract/examples/04_orm_vs_batch.py)
+demonstra. O quinto — alocar memória por linha — é o que sobra para o Rust
+resolver, e é o que este exemplo mede.
+
+Há ainda um custo extra que não tem relação com GC:
 materializar structs converte o layout **colunar (SoA)** em **orientado a
 linha (AoS)**, sacrificando localidade de cache e vetorização.
 
@@ -100,7 +109,8 @@ Mas repare na **escala absoluta**: as três processam 1M de contratos em
 *dezenas de milissegundos*. É aí que mora a diferença real para o ORM — um
 `Vec` por linha em Rust custa ~50ms a mais; um objeto Python por linha
 custaria segundos, mais pressão de GC e memória. Os quatro custos caros já
-foram eliminados por estarmos em Rust; o que sobra é o quinto, e ele é
+foram eliminados antes de chegar aqui — dois pela stack Arrow, dois pelo
+Rust; o que sobra é o quinto, e ele é
 mensurável, evitável e benigno.
 
 A lição: **o padrão "não materialize por linha" continua valendo dentro do
@@ -215,7 +225,8 @@ if __name__ == "__main__":
     print(f"\nEvitar a alocação por linha vale ~{t_a / t_c:.0f}x — não é micro-otimização.")
     print(f"Mas repare na ESCALA: as três processam {NUM_CONTRATOS:,} contratos em dezenas")
     print("de ms. Em Python, um objeto por linha custaria segundos + pressão de GC.")
-    print("Os 4 custos caros do ORM já sumiram por ser Rust; sobra só a alocação —")
+    print("Dos 4 custos caros do ORM, 2 sumiram pela stack Arrow e 2 por ser Rust;")
+    print("sobra só a alocação —")
     print("mensurável, evitável e benigna. O padrão 'não materialize por linha' vale aqui também.")
 
     print("\n[amostra] id_contrato -> receita_projetada:")

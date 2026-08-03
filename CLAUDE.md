@@ -13,9 +13,11 @@ goal is that every example runs end-to-end and is clearly explained, not that
 it be a reusable library.
 
 The published docs live at <https://felipenoris.github.io/etl-cookbook-tutorial/>.
-The root `README.md` is the authoritative, in-depth overview (data model, type
-compatibility table, measured performance comparison) — read it before making
-non-trivial changes.
+The root `README.md` is the authoritative overview of the repository (goals,
+data model, prerequisites, how to run everything) — read it before making
+non-trivial changes. The **type compatibility table** and the **measured
+performance comparison** are not in the README: it delegates both to the
+published pdoc docs (`examples-rust-extension/`, rendered under `/python/`).
 
 ## Language convention (important)
 
@@ -159,7 +161,9 @@ Per-project work — always operate **inside** the subproject directory:
   literally `CREATE TEMP VIEW`: it shows up in `duckdb_views()`, has empty
   `sql`, and `EXPORT DATABASE` skips it. **Hive partition columns are
   `VARCHAR`** (`'01'`), so `rel.filter("order_month = 1")` inserts a `CAST` that
-  kills file pruning (~3x slower, measured) — compare against a literal of the
+  kills file pruning (reads 6 files instead of 1; the time penalty measures
+  ~2-3x on a millisecond-scale query, so cite the pruning, not the ratio) —
+  compare against a literal of the
   partition's own type. The raw SQL string form rewrites the cast itself; a
   relation or a view does not. See `examples-DuckDB/examples/26_*.py` and
   `27_*.py`.

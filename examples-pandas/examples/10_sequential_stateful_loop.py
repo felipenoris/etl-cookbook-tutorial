@@ -30,6 +30,8 @@ complexas entre linhas), cenário que na prática migraria para o Rust.
 Rode com: `uv run examples/10_sequential_stateful_loop.py`
 """
 
+import time
+
 import pandas as pd
 
 from _common import load_orders, load_products, section
@@ -70,6 +72,7 @@ if __name__ == "__main__":
     out_tier: list[str] = []
     n_lotes = 0
 
+    t_inicio = time.perf_counter()
     # o pandas não streama; fatiamos em blocos com iloc para simular os lotes
     for inicio in range(0, len(enriquecido), BATCH):
         bloco = enriquecido.iloc[inicio : inicio + BATCH]
@@ -82,7 +85,9 @@ if __name__ == "__main__":
             out_cumulative.append(total)
             out_tier.append(tier(total))
 
+    t_laco = time.perf_counter() - t_inicio
     print(f"{len(out_ids):,} linhas processadas em {n_lotes} blocos de até {BATCH:,}")
+    print(f"tempo do laço: {t_laco * 1000:.1f}ms")
 
     section("Resultado como DataFrame (backend Arrow, amostra)")
     resultado = pd.DataFrame(
@@ -96,7 +101,9 @@ if __name__ == "__main__":
 
     section("O jeito CERTO em pandas: groupby().cumsum() vetorizado, em 1 linha")
     # a mesma soma corrente por cliente, vetorizada — sem laço nenhum
+    t_inicio = time.perf_counter()
     enriquecido["cumsum_vetorizado"] = enriquecido.groupby("customer_id")["amount"].cumsum()
+    t_vetorizado = time.perf_counter() - t_inicio
     # o resultado do laço, alinhado à mesma ordem, deve bater
     bate = bool(
         (
@@ -105,6 +112,8 @@ if __name__ == "__main__":
         ).all()
     )
     print(f"o acumulado do laço bate com o groupby().cumsum() vetorizado: {bate}")
-    print("(o cumsum vetorizado é ~centenas de vezes mais rápido; o laço só se")
-    print(" justifica quando a dependência entre linhas não cabe num cumsum —")
-    print(" e aí o caso costuma migrar para uma extensão nativa em Rust)")
+    print(f"\nlaço linha a linha: {t_laco * 1000:8.1f}ms")
+    print(f"cumsum vetorizado:  {t_vetorizado * 1000:8.1f}ms  "
+          f"({t_laco / t_vetorizado:.0f}x mais rápido)")
+    print("O laço só se justifica quando a dependência entre linhas não cabe num")
+    print("cumsum — e aí o caso costuma migrar para uma extensão nativa em Rust.")
