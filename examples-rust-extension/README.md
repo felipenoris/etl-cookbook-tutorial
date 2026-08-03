@@ -23,7 +23,7 @@ examples-rust-extension/
   run_nested_params.py     # 1:N no Rust: materializar vs emprestar fatias (a discussão "isso vira um ORM?")
   docs_demo.py             # demonstração dos recursos do pdoc (math, mermaid, include, markdown)
   docs_includes/            # arquivos markdown puxados via `.. include::` nas docstrings
-  docs/                     # gerado por `pdoc` (etapa 7) — abrir docs/index.html no browser
+  docs/                     # gerado por `pdoc` (etapa 9) — abrir docs/index.html no browser
 ```
 
 ## Setup e build
@@ -298,15 +298,19 @@ ao exemplo `../examples-DuckDB/examples/04_memory_limit_and_spill.py`), enriquec
 a extensão Rust, resume com pandas (backend Arrow) e grava o resultado em
 `../data/rich/order_metrics/`, particionado por `customer_tier`.
 
-## Documentação (etapa 7)
+## Documentação (etapa 9)
 
 ```bash
-uv run pdoc --math --mermaid --docformat google --output-dir docs etl_rust_ext ./run_etl.py ./run_contracts_parallel.py ./run_data_types.py ./run_nested_params.py ./docs_demo.py
+uv run pdoc --math --mermaid --docformat google --template-dir pdoc-templates --output-dir docs \
+    etl_rust_ext ./run_etl.py ./run_contracts_parallel.py ./run_reorg_for_upstream.py \
+    ./run_data_types.py ./run_json_types.py ./run_nested_params.py ./docs_demo.py
 ```
 
 Gera HTML estático em `docs/`, navegável abrindo `docs/index.html` direto do
-disco no browser (sem precisar de servidor). (No `check-all.sh` a lista de
-módulos inclui também `./run_reorg_for_upstream.py`.)
+disco no browser (sem precisar de servidor). É exatamente o comando do
+`check-all.sh` e do workflow `docs.yml` — os três precisam listar os MESMOS
+módulos: um script `run_*.py` que não aparecer na lista simplesmente não é
+documentado, sem nenhum aviso.
 
 As flags e o módulo extra:
 

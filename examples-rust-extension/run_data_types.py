@@ -92,6 +92,7 @@ def make_all_types_batch() -> pa.RecordBatch:
 
 
 def main() -> None:
+    """Exercita, em 3 etapas, os 11 tipos Arrow atravessando a fronteira Python↔Rust."""
     customers = ds.dataset(RAW_DIR / "customers", format="parquet", partitioning="hive")
     products = ds.dataset(RAW_DIR / "products", format="parquet")
 

@@ -64,11 +64,15 @@ step 7/9 "Projeção paralela, reorganização pré-upstream, tipos Arrow, JSON 
 (cd examples-rust-extension && uv run run_json_types.py)
 (cd examples-rust-extension && uv run run_nested_params.py)
 
-step 8/9 "sqlalchemy-contract: suíte pytest (contrato, ORM vs colunar/lote, hierarquia)"
+step 8/9 "sqlalchemy-contract: suíte pytest (4 exemplos: contrato, ORM vs colunar/lote, hierarquia)"
 (cd examples-sqlalchemy-contract && uv run pytest)
 
 step 9/9 "Documentação: doctest do docs_demo, pdoc (docs/) e cargo doc (target/doc/)"
 (cd examples-rust-extension && uv run python -m doctest docs_demo.py -v > /dev/null)
+# A lista de módulos abaixo é EXPLÍCITA: um run_*.py novo só é documentado se
+# for acrescentado aqui, em .github/workflows/docs.yml (o que publica no Pages)
+# e na seção "Módulos documentados" de pdoc-templates/index.html.jinja2. Nada
+# verifica isso — esquecer o docs.yml deixa o site sem o módulo, em silêncio.
 (cd examples-rust-extension && uv run pdoc --math --mermaid --docformat google --template-dir pdoc-templates --output-dir docs \
     etl_rust_ext ./run_etl.py ./run_contracts_parallel.py ./run_reorg_for_upstream.py ./run_data_types.py ./run_json_types.py ./run_nested_params.py ./docs_demo.py)
 # `cargo doc` compila o pyo3-ffi, cujo build script precisa de um interpretador

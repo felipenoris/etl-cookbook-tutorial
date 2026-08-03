@@ -24,6 +24,14 @@ step() { printf '\n\033[1m==> [%s] %s\033[0m\n' "$1" "$2"; }
 
 step 1/5 "Dados parquet (data/raw e data/rich)"
 uv run --script data/generate_data.py --clean
+# O --clean do gerador só apaga *.parquet (e os diretórios que ficaram vazios).
+# Alguns exemplos gravam em data/rich artefatos que NÃO são parquet — o NDJSON
+# do exemplo 19 do DuckDB, o _spill/ de um exemplo 17 interrompido — e esses
+# sobrevivem, junto do diretório que os contém, deixando o repositório diferente
+# de um clone recém-feito. Todos moram num diretório `*_demo/` (saída de
+# exemplo, sempre regenerável); `order_metrics/` (o ETL de verdade) é só
+# parquet e fica a cargo do --clean acima.
+find data/rich -mindepth 1 -maxdepth 1 -type d -name '*_demo' -exec rm -rf {} + 2>/dev/null || true
 
 step 2/5 "Documentação gerada (examples-rust-extension/docs)"
 rm -rf examples-rust-extension/docs

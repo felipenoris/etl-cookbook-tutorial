@@ -170,6 +170,7 @@ def gerar_contratos_parquet(destino: Path) -> None:
 
 
 def main() -> None:
+    """Compara as três estratégias (serial, paralela e com memória limitada) sobre a mesma base."""
     workdir = Path(tempfile.mkdtemp(prefix="contratos_"))
     fonte = workdir / "contratos.parquet"
     gerar_contratos_parquet(fonte)

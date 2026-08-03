@@ -62,6 +62,7 @@ CUSTOMERS_GLOB = str(RAW_DIR / "customers" / "**" / "*.parquet")
 
 
 def section(title: str) -> None:
+    """Imprime um título de seção, separando as etapas na saída do script."""
     print(f"\n{'=' * 10} {title} {'=' * 10}")
 
 
@@ -91,6 +92,7 @@ def build_json_from_raw(con: duckdb.DuckDBPyConnection) -> None:
 
 
 def main() -> None:
+    """Percorre em 4 etapas o caminho do JSON opaco: perda do marcador, reparo, normalização e shredding."""
     con = duckdb.connect()
     build_json_from_raw(con)
 
