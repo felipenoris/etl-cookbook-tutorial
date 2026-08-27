@@ -64,7 +64,7 @@ step 7/9 "Projeção paralela, reorganização pré-upstream, tipos Arrow, JSON 
 (cd examples-rust-extension && uv run run_json_types.py)
 (cd examples-rust-extension && uv run run_nested_params.py)
 
-step 8/9 "sqlalchemy-contract: suíte pytest (4 exemplos: contrato, ORM vs colunar/lote, hierarquia)"
+step 8/9 "sqlalchemy-contract: suíte pytest (5 exemplos: contrato, ORM vs colunar/lote, hierarquia, SQL p/ DuckDB)"
 (cd examples-sqlalchemy-contract && uv run pytest)
 
 step 9/9 "Documentação: doctest do docs_demo, pdoc (docs/) e cargo doc (target/doc/)"

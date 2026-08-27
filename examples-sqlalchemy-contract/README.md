@@ -5,8 +5,9 @@ desenvolvimento de ETLs — modelos SQLAlchemy ORM + banco relacional efêmero +
 INSERT massivo de instâncias — para a stack Arrow/parquet/DuckDB, respondendo
 à pergunta: **onde o SQLAlchemy ainda encaixa, e de onde ele deve sair?**
 
-A resposta em uma linha: o SQLAlchemy fica como **contrato de schema** (e
-como cliente da base final); sai do **caminho por onde os dados passam**.
+A resposta em uma linha: o SQLAlchemy fica como **contrato de schema** e
+**gerador de SQL** (e como cliente da base final); sai do **caminho por onde
+os dados passam**.
 
 ## O modelo portado
 
@@ -29,6 +30,7 @@ RelacionamentoContaHierarquia, Lancamento) com três mudanças deliberadas:
 | `02_orm_vs_columnar.py` | a medição que motiva a migração: ORM vs Core vs Arrow→parquet→DuckDB CTAS, com linhas/s de cada caminho |
 | `03_account_hierarchy.py` | a árvore de contas (arestas parent→child por hierarquia) via `WITH RECURSIVE` no DuckDB, filtro por subárvore, N visões sobre as mesmas contas, FKs como queries de qualidade |
 | `04_orm_vs_batch.py` | o gradiente ORM → lote em Python puro: lazy loading (N+1), eager loading, linhas brutas e agregação vetorizada no DuckDB |
+| `05_sql_generation_duckdb.py` | o modelo como gerador de SQL para uma base DuckDB vazia: DDL compilado do contrato (com os `comment=` chegando ao catálogo), carga batch via `INSERT ... FROM SELECT` sobre DataFrames pandas (backend pyarrow), joins com `ON` inferidos das FKs e leitura em RecordBatches com memória constante |
 
 ```bash
 cd examples-sqlalchemy-contract
@@ -37,6 +39,7 @@ uv run examples/01_models_as_contract.py
 uv run examples/02_orm_vs_columnar.py          # aceita [n_linhas], default 100000
 uv run examples/03_account_hierarchy.py
 uv run examples/04_orm_vs_batch.py       # aceita [n_contas] [lanc_por_conta]
+uv run examples/05_sql_generation_duckdb.py    # aceita [n_lancamentos], default 200000
 ```
 
 ## O placar do exemplo 02 (100k lançamentos, SQLite em memória)
@@ -251,14 +254,18 @@ troca costuma compensar — mas é uma troca, não um almoço grátis.
 uv run pytest
 ```
 
-Smoke tests dos 4 exemplos + testes das projeções do contrato (tipos Arrow,
+Smoke tests dos 5 exemplos + testes das projeções do contrato (tipos Arrow,
 DDL com `COMMENT ON`, comprimentos de VARCHAR), da equivalência de resultados
 entre o caminho ORM e o colunar (mesmo COUNT e mesma SOMA decimal, igualdade
 estrita), da CTE recursiva (caminhos completos, filtro por subárvore,
 hierarquia alternativa independente), do anti-join pegando lançamentos
-órfãos e das quatro estratégias do exemplo 04 (as quatro contra um cenário
+órfãos, das quatro estratégias do exemplo 04 (as quatro contra um cenário
 determinístico calculado à mão, incluindo saldo que nunca fica positivo e
-contas sem lançamentos).
+contas sem lançamentos) e do SQL gerado do exemplo 05 (DDL aceito pelo
+DuckDB com os `comment=` no catálogo, carga set-based preservando a soma
+decimal exata, FK gerada rejeitando lançamento órfão, batch divergente do
+contrato rejeitado, e a agregação por RecordBatches batendo com o cálculo
+direto — Decimal a Decimal).
 
 ## Referências
 
@@ -266,3 +273,6 @@ contas sem lançamentos).
 - [SQLAlchemy — Core vs ORM](https://docs.sqlalchemy.org/en/20/tutorial/dbapi_transactions.html) — a distinção que o exemplo 02 mede.
 - [DuckDB — WITH RECURSIVE](https://duckdb.org/docs/stable/sql/query_syntax/with) — a CTE recursiva do exemplo 03 (introduzida em [`../examples-DuckDB/examples/09`](../examples-DuckDB/examples/09_advanced_sql_transforms.py)).
 - [Redshift — COMMENT](https://docs.aws.amazon.com/redshift/latest/dg/r_COMMENT.html) — o comando que a projeção `redshift_ddl_for` emite.
+- [SQLAlchemy — INSERT ... FROM SELECT](https://docs.sqlalchemy.org/en/20/tutorial/data_insert.html#insert-from-select) — a carga set-based do exemplo 05.
+- [DuckDB — COMMENT ON](https://duckdb.org/docs/stable/sql/statements/comment_on) — o statement (aceito desde a versão 0.10) que leva os `comment=` do contrato ao catálogo no exemplo 05.
+- [duckdb_engine](https://github.com/Mause/duckdb_engine) — o dialeto SQLAlchemy completo para o DuckDB; dispensado de propósito no exemplo 05, que gera o SQL com o dialeto genérico e o executa na conexão nativa para preservar o caminho colunar.

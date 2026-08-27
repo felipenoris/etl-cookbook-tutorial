@@ -8,6 +8,7 @@ dependencies = [
     "duckdb>=1.5.4",
     "pyarrow>=17",
     "numpy>=1.26",
+    "pandas>=2.2",
 ]
 
 [dependency-groups]
