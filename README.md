@@ -170,8 +170,9 @@ ligando a documentação Python (`/python`) e a Rust (`/rust`).
    contrato de schema (não de veículo de dados), a decomposição dos **cinco
    custos** que tornam o ORM lento, medidos na escrita (ORM vs. Core vs.
    colunar) e na leitura (o gradiente lazy loading → eager → linhas brutas →
-   lote vetorizado), e a árvore de plano de contas resolvida com
-   `WITH RECURSIVE` no DuckDB.
+   lote vetorizado), a árvore de plano de contas resolvida com
+   `WITH RECURSIVE` no DuckDB, e o modelo como **gerador de SQL** para uma
+   base DuckDB (DDL, carga em batch e joins, todos compilados do contrato).
 
 Cada subpasta tem seu próprio `README.md` com a lista de exemplos e os
 conceitos exercitados.
