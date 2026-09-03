@@ -7,8 +7,9 @@
 
 Projeto didático com exemplos independentes exercitando etapas específicas de
 um pipeline de ETL de dados, cada um em seu próprio projeto Python isolado
-(gerenciado com [`uv`](https://docs.astral.sh/uv/)), lendo a mesma base de
-dados fictícia particionada em parquet.
+(gerenciado com [`uv`](https://docs.astral.sh/uv/)), lendo — salvo duas
+exceções indicadas abaixo — a mesma base de dados fictícia particionada em
+parquet.
 
 ## Estrutura
 
@@ -17,7 +18,7 @@ etl-cookbook-tutorial/
   data/
     generate_data.py   # gera as bases fictícias (script standalone, PEP 723)
     raw/               # parquet particionado de entrada (customers, products, orders)
-    rich/              # parquet de saída do ETL (examples-rust-extension/run_etl.py)
+    rich/              # saídas geradas: o ETL (examples-rust-extension/run_etl.py) e as demos do DuckDB (06, 19, 28)
   examples-pandas/              # API do pandas com backend Arrow
   examples-pyarrow/             # API nativa do pyarrow
   examples-DuckDB/              # SQL em memória sobre parquet, com spill configurável
@@ -55,6 +56,13 @@ a fato fica só com tipos básicos, para manter as partições calibradas:
   (decimal128(12,2) — 2 casas decimais, o padrão do projeto), sku (binary)`.
 - **orders** — fato, particionado por `order_year=2025/order_month=01..06` (6 partições
   de ~44MB cada, ~33.7M linhas no total): `order_id, customer_id, product_id, order_date, quantity, status`.
+
+Duas partes do tutorial usam, de propósito, uma **base contábil fictícia
+própria** (veículos e lançamentos, com fechamento mensal) em vez desta:
+[`examples-sqlalchemy-contract/`](examples-sqlalchemy-contract), que porta um
+modelo ORM de lançamentos, e o exemplo 28 do DuckDB (a rotina de nova
+data-base), que gera a sua em `data/rich/duckdb_nova_data_base/` a cada
+execução.
 
 Os arquivos parquet não são versionados no git (ver `.gitignore`). Para gerar
 (ou regenerar) os dados:
@@ -156,7 +164,11 @@ ligando a documentação Python (`/python`) e a Rust (`/rust`).
    `COPY TO` particionado com recarga idempotente, staging persistente com
    UPSERT, ingestão de CSV com quarentena de rejeitadas, SQL avançado
    (recursiva, `PIVOT`, `ASOF JOIN`), macros/UDFs Python e
-   `EXPORT`/`IMPORT DATABASE`.
+   `EXPORT`/`IMPORT DATABASE` — fechado pela rotina completa de **nova
+   data-base** (exemplo 28): `.duckdb` vazio → DDL → view sobre o parquet +
+   staging da última partição → o mês novo derivado do staging em pandas e
+   devolvido por bulk insert, com chave gerada por `SEQUENCE` → validações →
+   `COPY` da partição nova de volta para a base.
 4. [`examples-rust-extension/`](examples-rust-extension) — fecha o ciclo: um ETL real que usa
    DuckDB (extract+join+spill) → pyarrow (projeção) → Rust via `pyo3-arrow`
    (transformação com estado, zero-copy) → pandas (resumo) → grava em

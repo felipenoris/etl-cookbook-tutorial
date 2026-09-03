@@ -11,6 +11,7 @@ Todos os parquet são minúsculos e escritos em `tmp_path` — a suíte não toc
 `data/raw` nem em `data/rich`.
 """
 
+import datetime as dt
 import importlib
 from decimal import Decimal
 
@@ -177,6 +178,82 @@ def test_rollback_desfaz_o_lote_mas_nao_a_sequence(mundo):
     assert sorted(id_ for (id_,) in ids) == [13, 14]  # o buraco fica
 
 
+def test_valor_explicito_nao_avanca_a_sequence(mundo):
+    # o próximo valor da sequence é 11; um INSERT explícito com 11 não a avança
+    mundo.execute(
+        "INSERT INTO stage_cad_lancamentos_mes VALUES (11, DATE '2025-01-10', 1, 1.00, '2025-01-31')"
+    )
+    df = lote(1)  # noqa: F841
+    with pytest.raises(duckdb.ConstraintException, match="Duplicate key"):
+        mundo.execute("INSERT INTO stage_cad_lancamentos_mes BY NAME SELECT * FROM df")
+
+
+def test_nextval_em_select_puro_nao_e_persistido_no_arquivo(tmp_path):
+    """Só uma transação de escrita leva o contador ao arquivo; nem CHECKPOINT salva um SELECT puro."""
+    db = str(tmp_path / "seq.duckdb")
+    con = duckdb.connect(db)
+    con.execute("CREATE SEQUENCE s START WITH 1")
+    con.execute("CREATE TABLE t (id INTEGER DEFAULT nextval('s'))")
+    con.execute("INSERT INTO t VALUES (DEFAULT), (DEFAULT)")  # usa 1 e 2, persistidos com a tabela
+    con.close()
+
+    con = duckdb.connect(db)
+    assert con.execute("SELECT nextval('s')").fetchone() == (3,)
+    con.execute("CHECKPOINT")
+    con.close()
+
+    con = duckdb.connect(db)
+    assert con.execute("SELECT nextval('s')").fetchone() == (3,)  # o 3 foi entregue de novo
+    con.execute("BEGIN")
+    assert con.execute("SELECT nextval('s')").fetchone() == (4,)
+    con.execute("COMMIT")
+    con.close()
+
+    con = duckdb.connect(db)
+    assert con.execute("SELECT nextval('s')").fetchone() == (5,)  # o COMMIT explícito persistiu
+    con.close()
+
+
+def test_currval_numa_sessao_nova_devolve_o_proximo_valor(tmp_path):
+    db = str(tmp_path / "seq.duckdb")
+    con = duckdb.connect(db)
+    con.execute("CREATE SEQUENCE s START WITH 1")
+    con.execute("CREATE TABLE t (id INTEGER DEFAULT nextval('s'))")
+    con.execute("INSERT INTO t VALUES (DEFAULT), (DEFAULT)")
+    assert con.execute("SELECT currval('s')").fetchone() == (2,)  # na sessão que usou: o último
+    con.close()
+
+    con = duckdb.connect(db)
+    assert con.execute("SELECT max(id) FROM t").fetchone() == (2,)
+    assert con.execute("SELECT currval('s')").fetchone() == (3,)  # sessão nova: o próximo, não o último
+    assert con.execute("SELECT last_value FROM duckdb_sequences()").fetchone() == (3,)
+    con.close()
+
+
+def test_nextval_nao_segue_a_ordem_do_lote_numa_carga_paralela():
+    """Um lote Arrow em muitos batches é lido em paralelo; só row_number() com ORDER BY é determinístico."""
+    lote_grande = exemplo.lote_para_medicao(1_000_000)  # noqa: F841 — 16 batches de 65.536
+    assert lote_grande.column("ordem").num_chunks > 1
+    con = duckdb.connect()
+    con.execute("SET threads = 8")
+    con.execute("CREATE SEQUENCE s START WITH 1")
+    con.execute("CREATE TEMP TABLE m (id_lancamento INTEGER DEFAULT nextval('s'), ordem INTEGER, valor DECIMAL(12, 2))")
+    con.execute("INSERT INTO m BY NAME SELECT ordem, valor FROM lote_grande")
+    con.execute("CREATE TEMP TABLE r (id_lancamento INTEGER, ordem INTEGER, valor DECIMAL(12, 2))")
+    con.execute("INSERT INTO r SELECT row_number() OVER (ORDER BY ordem), ordem, valor FROM lote_grande")
+    inversoes = "SELECT count(*) FILTER (WHERE ordem < anterior) FROM (SELECT ordem, lag(ordem) OVER (ORDER BY id_lancamento) AS anterior FROM {t})"
+    (com_nextval,) = con.execute(inversoes.format(t="m")).fetchone()
+    (com_row_number,) = con.execute(inversoes.format(t="r")).fetchone()
+    assert com_row_number == 0
+    assert com_nextval > 0  # os ids da sequence não acompanham a ordem das linhas do lote
+    # e mesmo assim são únicos e contíguos — o problema é só a ordem
+    assert con.execute("SELECT count(DISTINCT id_lancamento), min(id_lancamento), max(id_lancamento) FROM m").fetchone() == (
+        1_000_000,
+        1,
+        1_000_000,
+    )
+
+
 # --- as validações ----------------------------------------------------------
 def test_validacao_aprova_um_lote_correto(mundo):
     df = lote(1, 2)  # noqa: F841
@@ -212,18 +289,51 @@ def test_fk_de_tabela_temporaria_para_main_nao_e_suportada(mundo):
         mundo.execute("CREATE TEMP TABLE com_fk (id_veiculo INTEGER REFERENCES dom_veiculos (id_veiculo))")
 
 
-# --- o lote -----------------------------------------------------------------
-def test_monta_lote_sem_id_com_backend_pyarrow_e_recorrentes(mundo):
-    df = exemplo.monta_lote(mundo, "2024-12-31", "2025-01-31")
-    assert "id_lancamento" not in df.columns
-    assert all(isinstance(dtype, pd.ArrowDtype) for dtype in df.dtypes)
-    # os 5 lançamentos de dezembro caem no dia do fechamento -> todos recorrentes, mais os novos
-    assert len(df) == 5 + exemplo.LANCAMENTOS_NOVOS
-    assert (df["data_base_str"] == "2025-01-31").all()
-    assert df["data_lancamento"].min() >= pd.Timestamp("2025-01-01").date()
-    assert df["data_lancamento"].max() <= pd.Timestamp("2025-01-31").date()
-    # reproduzível: a seed é a data-base
-    assert df.equals(exemplo.monta_lote(mundo, "2024-12-31", "2025-01-31"))
+# --- o lote: derivado do mês anterior, em pandas ----------------------------
+def mes_anterior_de_teste():
+    """Dezembro/2024 como sairia do staging: 3 lançamentos, 2 deles no dia do fechamento."""
+    return pa.table(
+        {
+            "id_lancamento": pa.array([6, 7, 8], pa.int32()),
+            "data_lancamento": pa.array(
+                [dt.date(2024, 12, 10), dt.date(2024, 12, 31), dt.date(2024, 12, 31)], pa.date32()
+            ),
+            "id_veiculo": pa.array([1, 1, 2], pa.int32()),
+            "valor": pa.array([Decimal("10.00"), Decimal("-2.50"), Decimal("5.00")], pa.decimal128(12, 2)),
+            "data_base_str": pa.array(["2024-12-31"] * 3, pa.string()),
+        }
+    ).to_pandas(types_mapper=pd.ArrowDtype)
+
+
+def test_deriva_lote_saldos_de_abertura_e_recorrentes():
+    lote = exemplo.deriva_lote(mes_anterior_de_teste(), "2024-12-31", "2025-01-31")
+    assert "id_lancamento" not in lote.columns
+    assert all(isinstance(dtype, pd.ArrowDtype) for dtype in lote.dtypes)
+    assert lote["valor"].dtype == pd.ArrowDtype(pa.decimal128(12, 2))  # a soma do groupby não virou float
+    assert (lote["data_base_str"] == "2025-01-31").all()
+    registros = sorted(lote[["data_lancamento", "id_veiculo", "valor"]].itertuples(index=False, name=None))
+    assert registros == [
+        (dt.date(2025, 1, 1), 1, Decimal("7.50")),  # abertura do veículo 1: 10.00 - 2.50
+        (dt.date(2025, 1, 1), 2, Decimal("5.00")),  # abertura do veículo 2
+        (dt.date(2025, 1, 31), 1, Decimal("-2.50")),  # recorrente (estava no dia do fechamento)
+        (dt.date(2025, 1, 31), 2, Decimal("5.00")),  # recorrente
+    ]
+
+
+def test_mes_anterior_sai_do_staging_e_o_lote_derivado_volta_por_bulk_insert(mundo):
+    anterior = exemplo.carrega_mes_anterior(mundo, "2024-12-31")
+    assert len(anterior) == 5
+    assert anterior["valor"].dtype == pd.ArrowDtype(pa.decimal128(12, 2))
+    lote = exemplo.deriva_lote(anterior, "2024-12-31", "2025-01-31")  # noqa: F841
+    assert len(lote) == 2 + 5  # 2 saldos de abertura + 5 recorrentes (dezembro inteiro cai no fechamento)
+    ids = mundo.execute(
+        "INSERT INTO stage_cad_lancamentos_mes BY NAME SELECT * FROM lote RETURNING id_lancamento"
+    ).fetchall()
+    assert sorted(id_ for (id_,) in ids) == list(range(11, 18))
+    aberturas = mundo.execute(
+        "SELECT id_veiculo, valor FROM stage_cad_lancamentos_mes WHERE data_lancamento = DATE '2025-01-01' ORDER BY 1"
+    ).fetchall()
+    assert aberturas == [(1, Decimal("30.00")), (2, Decimal("20.00"))]  # veículos 1 e 2 alternados, 10.00 cada
 
 
 # --- a exportação -----------------------------------------------------------

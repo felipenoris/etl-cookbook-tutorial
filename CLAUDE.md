@@ -6,7 +6,10 @@ Guidance for AI assistants working in this repository.
 
 A didactic ETL cookbook: independent, self-contained examples that each
 exercise a specific stage of a data ETL pipeline, all reading the **same**
-fictional dataset (partitioned parquet in `data/raw`). Each technology lives in
+fictional dataset (partitioned parquet in `data/raw`) — with two deliberate
+exceptions that use their own fictional accounting base (vehicles + monthly
+ledger entries): `examples-sqlalchemy-contract` and DuckDB example 28, which
+generates its base under `data/rich/duckdb_nova_data_base/` on every run. Each technology lives in
 its **own isolated Python project** (a separate `pyproject.toml` + `.venv`
 managed with [`uv`](https://docs.astral.sh/uv/)). It is teaching material — the
 goal is that every example runs end-to-end and is clearly explained, not that
@@ -35,7 +38,7 @@ etl-cookbook-tutorial/
   data/
     generate_data.py     # generates the fictional dataset (standalone PEP 723 script)
     raw/                 # input: partitioned parquet (customers, products, orders) — gitignored
-    rich/                # ETL output (written by examples-rust-extension/run_etl.py) — gitignored
+    rich/                # generated outputs: the ETL (examples-rust-extension/run_etl.py) and DuckDB demos 06/19/28 — gitignored
   examples-pandas/                # pandas API with the Arrow backend
   examples-pyarrow/               # native pyarrow API
   examples-DuckDB/                # in-memory SQL over parquet, with configurable spill
@@ -176,7 +179,13 @@ Per-project work — always operate **inside** the subproject directory:
   `DependencyException` while a table in the same catalog uses it in a
   `DEFAULT` (across catalogs — `TEMP` table, `main` sequence — the dependency is
   simply not tracked: replace and drop both pass). So `START WITH max(id) + 1`
-  must be right at creation, i.e. after reading the existing data. `INSERT INTO
+  must be right at creation, i.e. after reading the existing data. Also: an
+  explicit id does not advance the sequence (next `nextval` collides), values
+  from a parallel `INSERT ... SELECT` do not follow the source order, and a
+  `nextval` in a plain auto-commit `SELECT` is **not persisted** to the file
+  (reopen hands out the same value; only a write transaction — explicit
+  `BEGIN/COMMIT` or any `INSERT` — saves the counter). Never treat the
+  sequence as the authority for ids stored outside the database. `INSERT INTO
   t BY NAME SELECT * FROM df` lets a DataFrame without the key column rely on
   that `DEFAULT`. **`COPY ... PARTITION_BY` with `OVERWRITE` deletes every file
   under the target directory** (all partitions); the idempotent partition
