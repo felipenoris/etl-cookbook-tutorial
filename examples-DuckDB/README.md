@@ -70,6 +70,7 @@ uv sync
 | `25_metadata_introspection.py` | introspecção sem ler dados: `parquet_schema` (tipo físico vs lógico), `parquet_file_metadata` (footer), `parquet_metadata` (row group × coluna: compressão, encoding, nulos), `parquet_kv_metadata`; o lado catálogo (`DESCRIBE`, `duckdb_columns`, `information_schema`, `.description`) e um detector de schema drift entre partições, com `union_by_name` reconciliando o caso benigno |
 | `26_relational_api_read_parquet.py` | `con.read_parquet()` devolve uma `DuckDBPyRelation` **lazy**: montagem condicional da query em Python (`.filter`/`.project`/`.aggregate`/`.join`), `.sql_query()` e `.query()` como pontes com o SQL, ausência de cache, e a pegadinha medida do **cast implícito na coluna de partição** matando o pruning (lê os 6 arquivos em vez de 1) |
 | `27_register_relations_and_dataframes.py` | `con.register()` **é** `CREATE TEMP VIEW`, provado pelo catálogo (`duckdb_views`, `information_schema`), pelo plano e pelo comportamento; as 3 diferenças (temporária, sem texto SQL, escopo de conexão); registrar `pandas.DataFrame`/`pyarrow.Table` e consultá-los por SQL; snapshot lógico via copy-on-write; `unregister`; `register` vs replacement scan |
+| `28_new_closing_date_routine.py` | rotina de **nova data-base** sobre uma base parquet particionada por data de fechamento: `.duckdb` vazio, DDL, dimensão carregada inteira + fatos como **view** (`hive_types` fixando a partição como `VARCHAR`) + última partição em `CREATE TEMP TABLE` de staging (pruning 1/12), **bulk insert de DataFrame pandas** (`INSERT ... BY NAME SELECT * FROM lote`) com `id_lancamento` vindo de `SEQUENCE` no servidor, validações por `ANTI JOIN` dentro da transação (`COMMIT`/`ROLLBACK`), e `COPY ... PARTITION_BY` de volta para a base de origem (recarga idempotente; `OVERWRITE` vs `OVERWRITE_OR_IGNORE` vs `APPEND`) |
 
 ## Glossário: comandos além do SQL transacional básico
 
@@ -142,6 +143,29 @@ no cabeçalho do exemplo 20.
   **devolver as linhas afetadas** já com as colunas preenchidas pelo banco — o
   jeito de resgatar as surrogate keys geradas por um lote inteiro numa só ida ao
   banco. *(exemplo 23)*
+- **`CREATE SEQUENCE seq START WITH n`** — o **único momento** de escolher onde a
+  numeração começa: não há `setval()` nem `ALTER SEQUENCE ... RESTART`, e
+  `CREATE OR REPLACE`/`DROP` são barrados enquanto uma tabela usar a sequence em
+  `DEFAULT`. Para continuar a numeração de uma base existente, crie a sequence
+  com `max(id) + 1` **depois** de ler a base. *(exemplo 28)*
+
+### Carga em lote (exemplo 28)
+
+- **`INSERT INTO t BY NAME SELECT ...`** — casa as colunas do `SELECT` com as da
+  tabela **pelo nome**, não pela posição; as ausentes recebem o `DEFAULT`. É o que
+  permite `SELECT * FROM df` quando o DataFrame não traz a chave que o banco gera
+  (o `SELECT *` posicional falha: "5 columns but 4 values"). Extensão do DuckDB.
+  *(exemplo 28)*
+- **`a ANTI JOIN b USING (col)`** — as linhas de `a` **sem** correspondente em
+  `b`: a forma direta do `WHERE NOT EXISTS (...)`. É a checagem de chave órfã em
+  lote quando não há FK declarada (há também `SEMI JOIN`, o inverso). Extensão
+  do DuckDB. *(exemplo 28)*
+- **`COPY (query) TO 'dir' (FORMAT parquet, PARTITION_BY (col), <modo>)`** — grava
+  um dataset hive-particionado; num diretório que já tem partições é preciso
+  escolher o modo: `OVERWRITE_OR_IGNORE` (substitui arquivos de mesmo nome só na
+  partição gravada), `OVERWRITE` (**apaga todos os arquivos do diretório-alvo**
+  antes de gravar) ou `APPEND` (arquivo novo de nome aleatório a cada execução).
+  Extensão do DuckDB. *(exemplos 06, 28)*
 
 ## Recursos OLTP e eficiência do DuckDB
 
@@ -233,6 +257,66 @@ O padrão que funciona bem:
 2. **validar em batch com SQL** (`ANTI JOIN`, `GROUP BY ... HAVING COUNT(*) > 1`);
 3. **reservar PK/FK para tabelas pequenas de referência**, onde a garantia
    declarativa vale o custo.
+
+## Rotina de nova data-base: DataFrame → staging → partição parquet (exemplo 28)
+
+O exemplo 28 junta as peças acima numa rotina de ETL completa sobre uma base
+contábil fictícia particionada por data de fechamento
+(`cad_lancamentos/data_base_str=yyyy-mm-dd/`): `.duckdb` vazio → DDL → carga da
+base atual (dimensão inteira, fatos como **view**, só a última partição num
+`CREATE TEMP TABLE` de staging) → bulk insert de um DataFrame pandas → validações
+→ `COPY` da partição nova de volta para a base de origem. Cinco fatos medidos
+definem a forma da rotina:
+
+**A sequence nasce com o `START WITH` certo, ou não nasce.** Não há `setval()`
+nem `ALTER SEQUENCE ... RESTART` (`NotImplementedException`), e `CREATE OR
+REPLACE SEQUENCE`/`DROP SEQUENCE` são barrados pela dependência da tabela que a
+usa no `DEFAULT` (`DependencyException`). Como o valor certo é
+`max(id_lancamento) + 1`, a sequence e o staging (a única tabela que a usa) só
+podem ser criados **depois** da view sobre a base — no passo de carga, não no de
+DDL. A dependência é rastreada por catálogo: com o staging `TEMP` e a sequence
+em `main`, o replace passa (e o `DEFAULT`, resolvido pelo nome a cada `INSERT`,
+passa a usar a sequence nova) — mas um `DROP SEQUENCE` também passa e deixa o
+`DEFAULT` apontando para o nada (`CatalogException` no próximo `INSERT`). É uma
+lacuna do rastreamento, não uma API.
+
+**`INSERT INTO t BY NAME SELECT * FROM df`.** O DataFrame não tem
+`id_lancamento`, então o `SELECT *` posicional falha ("table has 5 columns but 4
+values were supplied"). `BY NAME` casa as colunas pelo nome, ignora a ordem do
+DataFrame e deixa o `DEFAULT nextval(...)` preencher a chave — o "servidor gera
+a chave" de outros bancos, sem `executemany`. Os tipos do DataFrame com backend
+pyarrow chegam intactos: `decimal128(12,2)` → `DECIMAL(12,2)`, `date32` →
+`DATE`, `int32` → `INTEGER`.
+
+**A coluna de partição é tipada por autodetecção.** `hive_partitioning=true`
+tenta tipar o valor lido do caminho: `2024-12-31` vira `DATE`, `1`/`10` viram
+`BIGINT`, `01` fica `VARCHAR` (não faz o round-trip). Se o contrato diz
+`VARCHAR`, fixe com `hive_types={'data_base_str': 'VARCHAR'}` — o texto da view
+guarda a escolha. O pruning por partição funciona igual nos dois casos.
+
+**Validar em lote, dentro da transação.** FK do staging para a dimensão não
+existe: tabela temporária não referencia tabela do catálogo `main` ("Creating
+foreign keys across different schemas or catalogs is not supported"). A rotina
+faz o que a seção anterior recomenda: `BEGIN`, bulk insert, checagens por `ANTI
+JOIN`/`count(*)` sobre o mês inteiro, `COMMIT` se passam e `ROLLBACK` se não. O
+`ROLLBACK` desfaz o lote mas **não a sequence**: os ids consumidos viram um
+buraco na numeração, como no Postgres.
+
+**Os três modos de escrita do `COPY ... PARTITION_BY`**, medidos no exemplo e
+nos testes, num diretório que já tem partições:
+
+| Modo | Efeito |
+| --- | --- |
+| *(nenhum)* | recusa: `Directory "..." is not empty` |
+| `OVERWRITE_OR_IGNORE` | grava a partição do resultado; arquivos de mesmo nome (`data_0.parquet`) são substituídos e as outras partições ficam intactas |
+| `OVERWRITE` | **apaga todos os arquivos abaixo do diretório-alvo** — todas as partições, e qualquer outro arquivo — e só então grava (sobram as pastas vazias) |
+| `APPEND` | grava um arquivo de nome aleatório (UUID) na partição; rodar 2x duplica o mês |
+
+A recarga idempotente da rotina é remover a pasta da partição-alvo e gravar com
+`OVERWRITE_OR_IGNORE` (necessário só porque a pasta-raiz já existe). A view
+sobre o glob não precisa de ajuste — no `SELECT` seguinte ela já lista a
+partição nova —, e o `.duckdb` que sobra guarda só o catálogo (a dimensão e o
+texto da view, com o caminho absoluto); os fatos continuam nos parquet.
 
 ## Streaming em lotes: RecordBatch entrando e saindo (exemplos 15 e 24)
 

@@ -1,0 +1,301 @@
+"""Testes de contrato do exemplo 28 (rotina de nova data-base).
+
+Cada teste prova um comportamento do DuckDB em que a rotina se apoia — ou do
+qual ela desvia de propósito: a tipagem automática da coluna de partição, a
+sequence que não se reposiciona, o `INSERT ... BY NAME` preenchendo a chave
+pelo `DEFAULT`, a sequence fora da transação, a FK que não atravessa catálogos,
+e os três modos de escrita do `COPY ... PARTITION_BY` (o `OVERWRITE` apaga as
+partições vizinhas). As validações e a montagem do lote vêm do próprio exemplo.
+
+Todos os parquet são minúsculos e escritos em `tmp_path` — a suíte não toca em
+`data/raw` nem em `data/rich`.
+"""
+
+import importlib
+from decimal import Decimal
+
+import duckdb
+import pandas as pd
+import pyarrow as pa
+import pytest
+
+exemplo = importlib.import_module("28_new_closing_date_routine")
+
+DDL_STAGING = """
+    CREATE TEMP TABLE stage_cad_lancamentos_mes (
+        id_lancamento   INTEGER PRIMARY KEY DEFAULT nextval('seq_id_lancamento'),
+        data_lancamento DATE NOT NULL,
+        id_veiculo      INTEGER NOT NULL,
+        valor           DECIMAL(12, 2) NOT NULL,
+        data_base_str   VARCHAR NOT NULL
+    )
+"""
+
+
+def escreve_particao(con, raiz, data_base, ids):
+    """Uma partição hive `data_base_str=<data>` com uma linha por id (veículos 1 e 2 alternados)."""
+    pasta = raiz / f"data_base_str={data_base}"
+    pasta.mkdir(parents=True)
+    con.execute(
+        f"""
+        COPY (
+            SELECT CAST(i AS INTEGER) AS id_lancamento, CAST('{data_base}' AS DATE) AS data_lancamento,
+                   CAST(1 + i % 2 AS INTEGER) AS id_veiculo, 10.00::DECIMAL(12, 2) AS valor
+            FROM unnest({list(ids)}) t(i)
+        ) TO '{pasta / "data_0.parquet"}' (FORMAT parquet)
+        """
+    )
+
+
+@pytest.fixture
+def base(tmp_path):
+    """A base de origem mínima: 2 partições (novembro e dezembro de 2024) com 5 lançamentos cada."""
+    con = duckdb.connect()
+    raiz = tmp_path / "cad_lancamentos"
+    escreve_particao(con, raiz, "2024-11-30", range(1, 6))
+    escreve_particao(con, raiz, "2024-12-31", range(6, 11))
+    con.close()
+    return raiz
+
+
+@pytest.fixture
+def mundo(base):
+    """A conexão no estado do fim do passo 3: dimensão, view, sequence e staging com dezembro."""
+    con = duckdb.connect()
+    con.execute("CREATE TABLE dom_veiculos (id_veiculo INTEGER PRIMARY KEY, nome_veiculo VARCHAR NOT NULL)")
+    con.execute("INSERT INTO dom_veiculos VALUES (1, 'Alfa'), (2, 'Beta')")
+    con.execute(
+        f"""
+        CREATE VIEW cad_lancamentos AS
+        SELECT * FROM read_parquet('{base}/**/*.parquet', hive_partitioning=true,
+                                   hive_types={{'data_base_str': 'VARCHAR'}})
+        """
+    )
+    con.execute("CREATE SEQUENCE seq_id_lancamento START WITH 11")
+    con.execute(DDL_STAGING)
+    con.execute(
+        "INSERT INTO stage_cad_lancamentos_mes BY NAME SELECT * FROM cad_lancamentos WHERE data_base_str = '2024-12-31'"
+    )
+    yield con
+    con.close()
+
+
+def lote(*id_veiculos, nova="2025-01-31", dia="2025-01-15"):
+    """Um DataFrame pandas (backend pyarrow) sem `id_lancamento`, com as colunas fora de ordem."""
+    return pa.table(
+        {
+            "valor": pa.array([Decimal("1.00")] * len(id_veiculos), pa.decimal128(12, 2)),
+            "id_veiculo": pa.array(id_veiculos, pa.int32()),
+            "data_base_str": pa.array([nova] * len(id_veiculos), pa.string()),
+            "data_lancamento": pa.array([pd.Timestamp(dia).date()] * len(id_veiculos), pa.date32()),
+        }
+    ).to_pandas(types_mapper=pd.ArrowDtype)
+
+
+# --- a coluna de partição --------------------------------------------------
+def test_valor_de_particao_que_parece_data_vira_DATE_sem_hive_types(base):
+    con = duckdb.connect()
+    glob = f"{base}/**/*.parquet"
+    (tipo_padrao,) = con.execute(
+        f"SELECT typeof(data_base_str) FROM read_parquet('{glob}', hive_partitioning=true) LIMIT 1"
+    ).fetchone()
+    (tipo_fixado,) = con.execute(
+        f"SELECT typeof(data_base_str) FROM read_parquet('{glob}', hive_partitioning=true, "
+        "hive_types={'data_base_str': 'VARCHAR'}) LIMIT 1"
+    ).fetchone()
+    assert (tipo_padrao, tipo_fixado) == ("DATE", "VARCHAR")
+
+
+def test_a_view_le_so_a_particao_filtrada(mundo):
+    sql = "INSERT INTO stage_cad_lancamentos_mes BY NAME SELECT * FROM cad_lancamentos WHERE data_base_str = ?"
+    assert exemplo.arquivos_abertos(mundo, sql, ["2024-12-31"]) == "1/2"
+
+
+def test_proxima_data_base_e_o_ultimo_dia_do_mes_seguinte(mundo):
+    proxima = "SELECT strftime(last_day(CAST(? AS DATE) + INTERVAL 1 MONTH), '%Y-%m-%d')"
+    assert mundo.execute(proxima, ["2024-12-31"]).fetchone() == ("2025-01-31",)
+    assert mundo.execute(proxima, ["2024-01-31"]).fetchone() == ("2024-02-29",)
+
+
+# --- a sequence -------------------------------------------------------------
+def test_sequence_nao_se_reposiciona_no_mesmo_catalogo():
+    con = duckdb.connect()
+    con.execute("CREATE SEQUENCE s")
+    con.execute("CREATE TABLE t (id INTEGER DEFAULT nextval('s'))")
+    with pytest.raises(duckdb.DependencyException):
+        con.execute("CREATE OR REPLACE SEQUENCE s START WITH 100")
+    with pytest.raises(duckdb.DependencyException):
+        con.execute("DROP SEQUENCE s")
+    with pytest.raises(duckdb.NotImplementedException):
+        con.execute("ALTER SEQUENCE s RESTART WITH 100")
+    with pytest.raises(duckdb.CatalogException):
+        con.execute("SELECT setval('s', 100)")
+
+
+def test_dependencia_nao_e_rastreada_entre_catalogos():
+    """Tabela TEMP + sequence em main: o replace passa (e o DEFAULT resolve pelo nome), o drop também."""
+    con = duckdb.connect()
+    con.execute("CREATE SEQUENCE s START WITH 1")
+    con.execute("CREATE TEMP TABLE t (id INTEGER DEFAULT nextval('s'), x INTEGER)")
+    con.execute("CREATE OR REPLACE SEQUENCE s START WITH 100")
+    assert con.execute("INSERT INTO t (x) VALUES (0) RETURNING id").fetchone() == (100,)
+    con.execute("DROP SEQUENCE s")
+    with pytest.raises(duckdb.CatalogException):
+        con.execute("INSERT INTO t (x) VALUES (0)")
+
+
+def test_insert_by_name_preenche_o_id_pela_sequence(mundo):
+    df = lote(1, 2, 1)  # noqa: F841 — o replacement scan a encontra pelo nome
+    ids = mundo.execute(
+        "INSERT INTO stage_cad_lancamentos_mes BY NAME SELECT * FROM df RETURNING id_lancamento"
+    ).fetchall()
+    assert sorted(id_ for (id_,) in ids) == [11, 12, 13]  # continua do START WITH (max da base + 1)
+    gravado = mundo.execute(
+        "SELECT id_veiculo, valor, data_base_str FROM stage_cad_lancamentos_mes WHERE id_lancamento = 11"
+    ).fetchone()
+    assert gravado == (1, Decimal("1.00"), "2025-01-31")  # as colunas casaram pelo nome, não pela posição
+
+
+def test_select_star_posicional_falha_sem_a_coluna_do_id(mundo):
+    df = lote(1)  # noqa: F841
+    with pytest.raises(duckdb.BinderException, match="5 columns but 4 values"):
+        mundo.execute("INSERT INTO stage_cad_lancamentos_mes SELECT * FROM df")
+
+
+def test_rollback_desfaz_o_lote_mas_nao_a_sequence(mundo):
+    df = lote(1, 2)  # noqa: F841
+    (antes,) = mundo.execute("SELECT count(*) FROM stage_cad_lancamentos_mes").fetchone()
+    mundo.execute("BEGIN")
+    mundo.execute("INSERT INTO stage_cad_lancamentos_mes BY NAME SELECT * FROM df")
+    mundo.execute("ROLLBACK")
+    (depois,) = mundo.execute("SELECT count(*) FROM stage_cad_lancamentos_mes").fetchone()
+    assert depois == antes
+    assert mundo.execute("SELECT currval('seq_id_lancamento')").fetchone() == (12,)  # 11 e 12 foram consumidos
+    ids = mundo.execute(
+        "INSERT INTO stage_cad_lancamentos_mes BY NAME SELECT * FROM df RETURNING id_lancamento"
+    ).fetchall()
+    assert sorted(id_ for (id_,) in ids) == [13, 14]  # o buraco fica
+
+
+# --- as validações ----------------------------------------------------------
+def test_validacao_aprova_um_lote_correto(mundo):
+    df = lote(1, 2)  # noqa: F841
+    mundo.execute("INSERT INTO stage_cad_lancamentos_mes BY NAME SELECT * FROM df")
+    resultado = exemplo.valida_integridade(mundo, "2025-01-31")
+    assert len(resultado) == 3
+    assert all(problema is None for problema in resultado.values())
+
+
+def test_validacao_detecta_veiculo_sem_cadastro(mundo):
+    df = lote(1, 99, 99)  # noqa: F841
+    mundo.execute("INSERT INTO stage_cad_lancamentos_mes BY NAME SELECT * FROM df")
+    resultado = exemplo.valida_integridade(mundo, "2025-01-31")
+    assert resultado["todo id_veiculo existe em dom_veiculos"] == "sem cadastro: id 99 (2 linhas)"
+    # a validação é por data-base: dezembro (já no staging) não entra na conta
+    assert exemplo.valida_integridade(mundo, "2024-12-31")["todo id_veiculo existe em dom_veiculos"] is None
+
+
+def test_validacao_detecta_data_fora_do_mes_e_id_repetido(mundo):
+    df = lote(1, dia="2024-12-31")  # noqa: F841 — data de dezembro numa data-base de janeiro
+    mundo.execute("INSERT INTO stage_cad_lancamentos_mes BY NAME SELECT * FROM df")
+    # um id que já existe em novembro, forçado à mão (o DEFAULT nunca faria isso)
+    mundo.execute(
+        "INSERT INTO stage_cad_lancamentos_mes VALUES (3, DATE '2025-01-10', 1, 1.00, '2025-01-31')"
+    )
+    resultado = exemplo.valida_integridade(mundo, "2025-01-31")
+    assert resultado["data_lancamento dentro do mês da data-base"] == "1 linha(s) fora do mês"
+    assert resultado["id_lancamento inédito na base histórica"] == "1 id(s) já usados"
+
+
+def test_fk_de_tabela_temporaria_para_main_nao_e_suportada(mundo):
+    with pytest.raises(duckdb.BinderException, match="across different schemas or catalogs"):
+        mundo.execute("CREATE TEMP TABLE com_fk (id_veiculo INTEGER REFERENCES dom_veiculos (id_veiculo))")
+
+
+# --- o lote -----------------------------------------------------------------
+def test_monta_lote_sem_id_com_backend_pyarrow_e_recorrentes(mundo):
+    df = exemplo.monta_lote(mundo, "2024-12-31", "2025-01-31")
+    assert "id_lancamento" not in df.columns
+    assert all(isinstance(dtype, pd.ArrowDtype) for dtype in df.dtypes)
+    # os 5 lançamentos de dezembro caem no dia do fechamento -> todos recorrentes, mais os novos
+    assert len(df) == 5 + exemplo.LANCAMENTOS_NOVOS
+    assert (df["data_base_str"] == "2025-01-31").all()
+    assert df["data_lancamento"].min() >= pd.Timestamp("2025-01-01").date()
+    assert df["data_lancamento"].max() <= pd.Timestamp("2025-01-31").date()
+    # reproduzível: a seed é a data-base
+    assert df.equals(exemplo.monta_lote(mundo, "2024-12-31", "2025-01-31"))
+
+
+# --- a exportação -----------------------------------------------------------
+def conta(con, raiz, data_base=None):
+    filtro = f"WHERE data_base_str = '{data_base}'" if data_base else ""
+    return con.execute(
+        f"SELECT count(*) FROM read_parquet('{raiz}/**/*.parquet', hive_partitioning=true, "
+        f"hive_types={{'data_base_str': 'VARCHAR'}}) {filtro}"
+    ).fetchone()[0]
+
+
+def test_copy_para_diretorio_existente_exige_um_modo(mundo, base):
+    with pytest.raises(duckdb.IOException, match="not empty"):
+        mundo.execute(
+            f"COPY (SELECT 99 AS id_lancamento, '2025-01-31' AS data_base_str) TO '{base}' "
+            "(FORMAT parquet, PARTITION_BY (data_base_str))"
+        )
+
+
+def test_overwrite_or_ignore_preserva_as_outras_particoes(mundo, base):
+    mundo.execute(
+        f"COPY (SELECT 99 AS id_lancamento, '2025-01-31' AS data_base_str) TO '{base}' "
+        "(FORMAT parquet, PARTITION_BY (data_base_str), OVERWRITE_OR_IGNORE)"
+    )
+    assert conta(mundo, base) == 11
+    assert conta(mundo, base, "2024-11-30") == 5
+
+
+def test_overwrite_apaga_os_arquivos_das_outras_particoes(mundo, base):
+    (base / "solto.txt").write_text("nem parquet escapa")
+    mundo.execute(
+        f"COPY (SELECT 99 AS id_lancamento, '2025-01-31' AS data_base_str) TO '{base}' "
+        "(FORMAT parquet, PARTITION_BY (data_base_str), OVERWRITE)"
+    )
+    # some todo arquivo abaixo do diretório-alvo; as pastas das partições antigas ficam vazias
+    assert [p.relative_to(base).as_posix() for p in base.rglob("*") if p.is_file()] == [
+        "data_base_str=2025-01-31/data_0.parquet"
+    ]
+    assert sorted(p.name for p in base.iterdir()) == [
+        "data_base_str=2024-11-30",
+        "data_base_str=2024-12-31",
+        "data_base_str=2025-01-31",
+    ]
+    assert conta(mundo, base) == 1
+
+
+def test_append_duplica_a_particao_a_cada_execucao(mundo, base):
+    for _ in range(2):
+        mundo.execute(
+            f"COPY (SELECT 99 AS id_lancamento, '2025-01-31' AS data_base_str) TO '{base}' "
+            "(FORMAT parquet, PARTITION_BY (data_base_str), APPEND)"
+        )
+    assert len(list((base / "data_base_str=2025-01-31").glob("*.parquet"))) == 2
+    assert conta(mundo, base, "2025-01-31") == 2
+
+
+def test_exportacao_da_rotina_e_idempotente_e_a_view_enxerga_a_particao(mundo, base):
+    import shutil
+
+    df = lote(1, 2, 1)  # noqa: F841
+    mundo.execute("INSERT INTO stage_cad_lancamentos_mes BY NAME SELECT * FROM df")
+    particao = base / "data_base_str=2025-01-31"
+    for _ in range(2):
+        shutil.rmtree(particao, ignore_errors=True)
+        mundo.execute(
+            f"COPY (SELECT * FROM stage_cad_lancamentos_mes WHERE data_base_str = ?) TO '{base}' "
+            "(FORMAT parquet, PARTITION_BY (data_base_str), OVERWRITE_OR_IGNORE)",
+            ["2025-01-31"],
+        )
+    assert conta(mundo, base) == 13
+    # a view do passo 3, sem nenhum ajuste, já lista a data-base nova
+    assert mundo.execute("SELECT max(data_base_str), count(*) FROM cad_lancamentos").fetchone() == (
+        "2025-01-31",
+        13,
+    )

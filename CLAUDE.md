@@ -159,14 +159,29 @@ Per-project work — always operate **inside** the subproject directory:
   lazy `DuckDBPyRelation` (a query, not a result) bound to its connection —
   passing it to another connection raises. `con.register(name, obj)` is
   literally `CREATE TEMP VIEW`: it shows up in `duckdb_views()`, has empty
-  `sql`, and `EXPORT DATABASE` skips it. **Hive partition columns are
-  `VARCHAR`** (`'01'`), so `rel.filter("order_month = 1")` inserts a `CAST` that
+  `sql`, and `EXPORT DATABASE` skips it. **Hive partition columns are typed by
+  autodetection**: a value that round-trips becomes `BIGINT` (`1`, `10`) or
+  `DATE` (`2024-12-31`); one that does not stays `VARCHAR` (`'01'`, the case of
+  `data/raw`). Pin the contract with `hive_types={'col': 'VARCHAR'}` when it
+  matters (example 28). Because `order_month` is `VARCHAR`,
+  `rel.filter("order_month = 1")` inserts a `CAST` that
   kills file pruning (reads 6 files instead of 1; the time penalty measures
   ~2-3x on a millisecond-scale query, so cite the pruning, not the ratio) —
   compare against a literal of the
   partition's own type. The raw SQL string form rewrites the cast itself; a
   relation or a view does not. See `examples-DuckDB/examples/26_*.py` and
   `27_*.py`.
+- **Sequences cannot be repositioned.** No `setval()`, no `ALTER SEQUENCE ...
+  RESTART`; `CREATE OR REPLACE SEQUENCE`/`DROP SEQUENCE` raise
+  `DependencyException` while a table in the same catalog uses it in a
+  `DEFAULT` (across catalogs — `TEMP` table, `main` sequence — the dependency is
+  simply not tracked: replace and drop both pass). So `START WITH max(id) + 1`
+  must be right at creation, i.e. after reading the existing data. `INSERT INTO
+  t BY NAME SELECT * FROM df` lets a DataFrame without the key column rely on
+  that `DEFAULT`. **`COPY ... PARTITION_BY` with `OVERWRITE` deletes every file
+  under the target directory** (all partitions); the idempotent partition
+  reload is `rmtree(partition dir)` + `OVERWRITE_OR_IGNORE`. See
+  `examples-DuckDB/examples/28_*.py`.
 - **JSON is an Arrow extension type, not a `DataType`.** `arrow.json` =
   storage `utf8` **plus** an `ARROW:extension:name` marker on the field
   (`pa.json_()` in pyarrow, `arrow_schema::extension::Json` in Rust — needs the
