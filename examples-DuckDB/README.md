@@ -70,7 +70,7 @@ uv sync
 | `25_metadata_introspection.py` | introspecção sem ler dados: `parquet_schema` (tipo físico vs lógico), `parquet_file_metadata` (footer), `parquet_metadata` (row group × coluna: compressão, encoding, nulos), `parquet_kv_metadata`; o lado catálogo (`DESCRIBE`, `duckdb_columns`, `information_schema`, `.description`) e um detector de schema drift entre partições, com `union_by_name` reconciliando o caso benigno |
 | `26_relational_api_read_parquet.py` | `con.read_parquet()` devolve uma `DuckDBPyRelation` **lazy**: montagem condicional da query em Python (`.filter`/`.project`/`.aggregate`/`.join`), `.sql_query()` e `.query()` como pontes com o SQL, ausência de cache, e a pegadinha medida do **cast implícito na coluna de partição** matando o pruning (lê os 6 arquivos em vez de 1) |
 | `27_register_relations_and_dataframes.py` | `con.register()` **é** `CREATE TEMP VIEW`, provado pelo catálogo (`duckdb_views`, `information_schema`), pelo plano e pelo comportamento; as 3 diferenças (temporária, sem texto SQL, escopo de conexão); registrar `pandas.DataFrame`/`pyarrow.Table` e consultá-los por SQL; snapshot lógico via copy-on-write; `unregister`; `register` vs replacement scan |
-| `28_new_closing_date_routine.py` | rotina de **nova data-base** sobre uma base parquet particionada por data de fechamento: `.duckdb` vazio, DDL, dimensão carregada inteira + fatos como **view** (`hive_types` fixando a partição como `VARCHAR`) + última partição em `CREATE TEMP TABLE` de staging (pruning 1/12), o mês novo **derivado do staging em pandas** (backend pyarrow) e devolvido por **bulk insert** (`INSERT ... BY NAME SELECT * FROM lote`) com `id_lancamento` vindo de `SEQUENCE` no servidor, validações por `ANTI JOIN` dentro da transação (`COMMIT`/`ROLLBACK`), e `COPY ... PARTITION_BY` de volta para a base de origem (recarga idempotente; `OVERWRITE` vs `OVERWRITE_OR_IGNORE` vs `APPEND`) |
+| `28_new_closing_date_routine.py` | rotina de **nova data-base** sobre uma base parquet particionada por data de fechamento: `.duckdb` vazio, DDL, dimensão carregada inteira + fatos como **view** (`hive_types` fixando a partição como `VARCHAR`) + última partição em `CREATE TEMP TABLE` de staging (pruning 1/12), o mês novo **derivado do staging em pandas** (backend pyarrow) e devolvido por **bulk insert** (`INSERT ... BY NAME SELECT * FROM lote`) com `id_lancamento` vindo de `SEQUENCE` no servidor, `carrega_lote` (bulk insert + validações por `ANTI JOIN` numa única transação, `COMMIT`/`ROLLBACK`), e `COPY ... PARTITION_BY` de volta para a base de origem (recarga idempotente; `OVERWRITE` vs `OVERWRITE_OR_IGNORE` vs `APPEND`) |
 
 ## Glossário: comandos além do SQL transacional básico
 
@@ -324,9 +324,12 @@ guarda a escolha. O pruning por partição funciona igual nos dois casos.
 existe: tabela temporária não referencia tabela do catálogo `main` ("Creating
 foreign keys across different schemas or catalogs is not supported"). A rotina
 faz o que a seção anterior recomenda: `BEGIN`, bulk insert, checagens por `ANTI
-JOIN`/`count(*)` sobre o mês inteiro, `COMMIT` se passam e `ROLLBACK` se não. O
-`ROLLBACK` desfaz o lote mas **não a sequence**: os ids consumidos viram um
-buraco na numeração, como no Postgres.
+JOIN`/`count(*)` sobre o mês inteiro, `COMMIT` se passam e `ROLLBACK` se não —
+tudo dentro de `carrega_lote`, o único caminho de entrada do staging. É a
+garantia "impossível esquecer de validar" que uma FK daria, sem o custo linha a
+linha dela; um erro no próprio `INSERT` (`NOT NULL`, PK) aborta a transação, e
+a função reverte e propaga. O `ROLLBACK` desfaz o lote mas **não a sequence**:
+os ids consumidos viram um buraco na numeração, como no Postgres.
 
 **Os três modos de escrita do `COPY ... PARTITION_BY`**, medidos no exemplo e
 nos testes, num diretório que já tem partições:
