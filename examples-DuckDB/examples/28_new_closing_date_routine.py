@@ -26,18 +26,19 @@ a partição nova **no mesmo lugar da base de origem**. Seis passos:
    partição da última `data_base_str` é materializada em `CREATE TEMP TABLE
    stage_cad_lancamentos_mes` — é dela que o mês novo é derivado, e o
    `EXPLAIN` mostra o pruning abrindo 1 arquivo de 12.
-4. **Bulk insert do lote novo, derivado do staging** — o mês fechado sai do
-   staging como DataFrame pandas (backend pyarrow, via Arrow, sem passar por
-   objetos Python), a regra de derivação roda em Python e o resultado volta
-   com `INSERT INTO stage_cad_lancamentos_mes BY NAME SELECT * FROM lote`. A
-   regra aqui é fictícia e simples (saldos de abertura + recorrentes); na
-   vida real é a lógica de negócio da rotina — o caminho do dado é o mesmo.
-   O DataFrame **não traz** `id_lancamento`: a chave vem do `DEFAULT
-   nextval('seq_id_lancamento')`, gerada no lado do "servidor".
-5. **Validações de integridade** — todo `id_veiculo` existe em `dom_veiculos`?
-   (`ANTI JOIN`), as datas caem no mês da data-base?, os ids não colidem com a
-   base histórica? Os passos 4 e 5 rodam **na mesma transação**: `COMMIT` se
-   passa, `ROLLBACK` se não — o lote inteiro entra ou nada entra.
+4. **O lote novo, derivado do staging** — o mês fechado sai do staging como
+   DataFrame pandas (backend pyarrow, via Arrow, sem passar por objetos
+   Python) e a regra de derivação roda em Python. A regra aqui é fictícia e
+   simples (saldos de abertura + recorrentes); na vida real é a lógica de
+   negócio da rotina — o caminho do dado é o mesmo. O DataFrame **não traz**
+   `id_lancamento`: a chave vem do `DEFAULT nextval('seq_id_lancamento')`,
+   gerada no lado do "servidor".
+5. **`carrega_lote`: bulk insert + validações numa única transação** —
+   `INSERT INTO stage_cad_lancamentos_mes BY NAME SELECT * FROM lote` e, em
+   seguida, as checagens: todo `id_veiculo` existe em `dom_veiculos`?
+   (`ANTI JOIN`), as datas caem no mês da data-base?, os ids não colidem com
+   a base histórica? `COMMIT` se passam, `ROLLBACK` se não — o lote inteiro
+   entra ou nada entra, e não existe caminho para inserir sem validar.
 6. **Exportar a nova data-base** — `COPY ... (PARTITION_BY (data_base_str))`
    para a base de origem, substituindo a partição nova (recarga idempotente).
    A view do passo 3 enxerga a partição nova sem nenhum ajuste.
@@ -339,6 +340,38 @@ def imprime_validacao(resultado: dict[str, str | None]) -> bool:
     return all(problema is None for problema in resultado.values())
 
 
+def carrega_lote(con: duckdb.DuckDBPyConnection, lote: pd.DataFrame, nova: str) -> bool:
+    """Bulk insert + validações numa única transação: o lote entra inteiro ou não entra.
+
+    É o único caminho de entrada do staging para a data-base nova — não há como
+    inserir sem validar. É a garantia que uma FOREIGN KEY daria, sem o custo
+    linha a linha dela (e a FK nem é possível aqui: tabela TEMP não referencia
+    o catálogo main). Um erro no próprio INSERT (NOT NULL, PK) aborta a
+    transação: a função reverte e propaga.
+
+    O `SELECT * FROM lote` funciona dentro da função porque o replacement scan
+    procura o nome no frame de quem chama `execute` — aqui, o parâmetro `lote`
+    (exemplo 27). Devolve True se o lote foi commitado.
+    """
+    con.execute("BEGIN")
+    try:
+        ids = [
+            id_
+            for (id_,) in con.execute(
+                "INSERT INTO stage_cad_lancamentos_mes BY NAME SELECT * FROM lote RETURNING id_lancamento"
+            ).fetchall()
+        ]
+        faixa = f"id_lancamento {min(ids):,}..{max(ids):,} (gerados pela sequence)" if ids else "nenhum id"
+        print(f"INSERT ... BY NAME: {len(ids):,} linhas, {faixa}")
+        aprovado = imprime_validacao(valida_integridade(con, nova))
+    except duckdb.Error:
+        con.execute("ROLLBACK")
+        raise
+    con.execute("COMMIT" if aprovado else "ROLLBACK")
+    print(f"-> {'COMMIT' if aprovado else 'ROLLBACK'}")
+    return aprovado
+
+
 if __name__ == "__main__":
     section("Preparação: a base de origem fictícia (6 veículos, 12 datas-base em parquet)")
     prepara_base_ficticia()
@@ -436,7 +469,7 @@ if __name__ == "__main__":
         """
     ).show()
 
-    section("4) Bulk insert: o mês novo derivado do staging em pandas, id gerado pela SEQUENCE")
+    section("4) O lote novo: derivado do staging em pandas (backend pyarrow)")
     (nova,) = con.execute(
         "SELECT strftime(last_day(CAST(? AS DATE) + INTERVAL 1 MONTH), '%Y-%m-%d')", [ultima]
     ).fetchone()
@@ -453,33 +486,22 @@ if __name__ == "__main__":
         con.execute("INSERT INTO stage_cad_lancamentos_mes SELECT * FROM lote")
     except duckdb.BinderException as erro:
         print(f"  {type(erro).__name__}: {str(erro).splitlines()[0]}")
-    con.execute("BEGIN")  # 4 e 5 na mesma transação: o lote só fica se passar na validação
-    ids = [
-        id_
-        for (id_,) in con.execute(
-            "INSERT INTO stage_cad_lancamentos_mes BY NAME SELECT * FROM lote RETURNING id_lancamento"
-        ).fetchall()
-    ]
-    print("INSERT ... BY NAME casa as colunas pelo nome e o DEFAULT preenche a que falta:")
-    print(f"  {len(ids):,} linhas inseridas, id_lancamento {min(ids):,}..{max(ids):,} (a base parou em {max_id:,})")
+    print("INSERT ... BY NAME casa as colunas pelo nome e o DEFAULT preenche a que falta —")
+    print(f"é o que carrega_lote faz (a base parou em {max_id:,}; a sequence continua de lá).")
 
-    section("5) Validações de integridade (ainda dentro da transação)")
-    aprovado = imprime_validacao(valida_integridade(con, nova))
-    con.execute("COMMIT" if aprovado else "ROLLBACK")
-    print(f"-> {'COMMIT' if aprovado else 'ROLLBACK'}")
+    section("5) carrega_lote: bulk insert + validações numa única transação")
+    if not carrega_lote(con, lote, nova):
+        raise SystemExit("lote rejeitado: nada foi gravado no staging")
 
     section("O que a validação pega: um defeito na derivação é revertido inteiro")
     # simula um bug na regra de derivação: o veículo 99 não existe em dom_veiculos
     lote_ruim = lote.head(3).assign(id_veiculo=pd.Series([1, 99, 2], dtype=pd.ArrowDtype(pa.int32())))
     (antes,) = con.execute("SELECT count(*) FROM stage_cad_lancamentos_mes").fetchone()
-    con.execute("BEGIN")
-    con.execute("INSERT INTO stage_cad_lancamentos_mes BY NAME SELECT * FROM lote_ruim")
-    aprovado = imprime_validacao(valida_integridade(con, nova))
-    con.execute("COMMIT" if aprovado else "ROLLBACK")
+    carrega_lote(con, lote_ruim, nova)
     (depois,) = con.execute("SELECT count(*) FROM stage_cad_lancamentos_mes").fetchone()
     (ultimo_id_usado,) = con.execute("SELECT currval('seq_id_lancamento')").fetchone()
     (maior_id_gravado,) = con.execute("SELECT max(id_lancamento) FROM stage_cad_lancamentos_mes").fetchone()
-    print(f"-> ROLLBACK: {antes:,} linhas antes, {depois:,} depois — nada do lote ficou.")
+    print(f"   {antes:,} linhas antes, {depois:,} depois — nada do lote ficou.")
     print(f"   A sequence não é transacional: currval = {ultimo_id_usado:,}, maior id gravado = {maior_id_gravado:,};")
     print(f"   os {ultimo_id_usado - maior_id_gravado} ids do lote revertido viram um buraco na numeração (inofensivo).")
     print("\nE uma FOREIGN KEY no staging não substituiria a checagem? Não dá — tabela temporária")

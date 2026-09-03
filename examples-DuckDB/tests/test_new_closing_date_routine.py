@@ -284,6 +284,34 @@ def test_validacao_detecta_data_fora_do_mes_e_id_repetido(mundo):
     assert resultado["id_lancamento inédito na base histórica"] == "1 id(s) já usados"
 
 
+def contagem(con):
+    return con.execute("SELECT count(*) FROM stage_cad_lancamentos_mes").fetchone()[0]
+
+
+def test_carrega_lote_commita_o_lote_aprovado(mundo):
+    antes = contagem(mundo)
+    assert exemplo.carrega_lote(mundo, lote(1, 2), "2025-01-31") is True
+    assert contagem(mundo) == antes + 2
+    assert mundo.execute("SELECT max(id_lancamento) FROM stage_cad_lancamentos_mes").fetchone() == (12,)
+
+
+def test_carrega_lote_reverte_o_lote_reprovado(mundo):
+    antes = contagem(mundo)
+    assert exemplo.carrega_lote(mundo, lote(1, 99), "2025-01-31") is False
+    assert contagem(mundo) == antes  # o lote inteiro saiu, inclusive a linha válida
+    assert mundo.execute("SELECT currval('seq_id_lancamento')").fetchone() == (12,)  # a sequence não volta
+
+
+def test_carrega_lote_reverte_e_propaga_um_erro_do_proprio_insert(mundo):
+    antes = contagem(mundo)
+    sem_valor = lote(1).assign(valor=pd.Series([None], dtype=pd.ArrowDtype(pa.decimal128(12, 2))))
+    with pytest.raises(duckdb.ConstraintException, match="NOT NULL"):
+        exemplo.carrega_lote(mundo, sem_valor, "2025-01-31")
+    assert contagem(mundo) == antes
+    # a transação abortada foi revertida: a conexão continua utilizável
+    assert exemplo.carrega_lote(mundo, lote(2), "2025-01-31") is True
+
+
 def test_fk_de_tabela_temporaria_para_main_nao_e_suportada(mundo):
     with pytest.raises(duckdb.BinderException, match="across different schemas or catalogs"):
         mundo.execute("CREATE TEMP TABLE com_fk (id_veiculo INTEGER REFERENCES dom_veiculos (id_veiculo))")
