@@ -70,7 +70,7 @@ uv sync
 | `25_metadata_introspection.py` | introspecção sem ler dados: `parquet_schema` (tipo físico vs lógico), `parquet_file_metadata` (footer), `parquet_metadata` (row group × coluna: compressão, encoding, nulos), `parquet_kv_metadata`; o lado catálogo (`DESCRIBE`, `duckdb_columns`, `information_schema`, `.description`) e um detector de schema drift entre partições, com `union_by_name` reconciliando o caso benigno |
 | `26_relational_api_read_parquet.py` | `con.read_parquet()` devolve uma `DuckDBPyRelation` **lazy**: montagem condicional da query em Python (`.filter`/`.project`/`.aggregate`/`.join`), `.sql_query()` e `.query()` como pontes com o SQL, ausência de cache, e a pegadinha medida do **cast implícito na coluna de partição** matando o pruning (lê os 6 arquivos em vez de 1) |
 | `27_register_relations_and_dataframes.py` | `con.register()` **é** `CREATE TEMP VIEW`, provado pelo catálogo (`duckdb_views`, `information_schema`), pelo plano e pelo comportamento; as 3 diferenças (temporária, sem texto SQL, escopo de conexão); registrar `pandas.DataFrame`/`pyarrow.Table` e consultá-los por SQL; snapshot lógico via copy-on-write; `unregister`; `register` vs replacement scan |
-| `28_new_closing_date_routine.py` | rotina de **nova data-base** sobre uma base parquet particionada por data de fechamento: `.duckdb` vazio, DDL, dimensão carregada inteira + fatos como **view** (`hive_types` fixando a partição como `VARCHAR`) + última partição em `CREATE TEMP TABLE` de staging (pruning 1/12), **bulk insert de DataFrame pandas** (`INSERT ... BY NAME SELECT * FROM lote`) com `id_lancamento` vindo de `SEQUENCE` no servidor, validações por `ANTI JOIN` dentro da transação (`COMMIT`/`ROLLBACK`), e `COPY ... PARTITION_BY` de volta para a base de origem (recarga idempotente; `OVERWRITE` vs `OVERWRITE_OR_IGNORE` vs `APPEND`) |
+| `28_new_closing_date_routine.py` | rotina de **nova data-base** sobre uma base parquet particionada por data de fechamento: `.duckdb` vazio, DDL, dimensão carregada inteira + fatos como **view** (`hive_types` fixando a partição como `VARCHAR`) + última partição em `CREATE TEMP TABLE` de staging (pruning 1/12), o mês novo **derivado do staging em pandas** (backend pyarrow) e devolvido por **bulk insert** (`INSERT ... BY NAME SELECT * FROM lote`) com `id_lancamento` vindo de `SEQUENCE` no servidor, validações por `ANTI JOIN` dentro da transação (`COMMIT`/`ROLLBACK`), e `COPY ... PARTITION_BY` de volta para a base de origem (recarga idempotente; `OVERWRITE` vs `OVERWRITE_OR_IGNORE` vs `APPEND`) |
 
 ## Glossário: comandos além do SQL transacional básico
 
@@ -147,7 +147,9 @@ no cabeçalho do exemplo 20.
   numeração começa: não há `setval()` nem `ALTER SEQUENCE ... RESTART`, e
   `CREATE OR REPLACE`/`DROP` são barrados enquanto uma tabela usar a sequence em
   `DEFAULT`. Para continuar a numeração de uma base existente, crie a sequence
-  com `max(id) + 1` **depois** de ler a base. *(exemplo 28)*
+  com `max(id) + 1` **depois** de ler a base. As demais restrições (ordem dos
+  valores, `ROLLBACK`, `currval`, persistência) estão na seção "Chaves
+  sequenciais (`SEQUENCE`): as restrições". *(exemplo 28)*
 
 ### Carga em lote (exemplo 28)
 
@@ -185,7 +187,10 @@ que referencie um valor inexistente na tabela pai é rejeitado.
 
 Chave sequencial automática **não** existe como `AUTO_INCREMENT`/`SERIAL`/
 `IDENTITY`; o idioma é `DEFAULT nextval('seq')`, exatamente o que o exemplo 23
-exercita (ver "Chaves geradas pelo banco", acima).
+exercita (ver "Chaves geradas pelo banco", acima). A sequence tem restrições
+próprias — não se reposiciona, não segue a ordem do lote, não volta no
+`ROLLBACK` e nem sempre é persistida —, reunidas na seção "Chaves sequenciais
+(`SEQUENCE`): as restrições", logo abaixo.
 
 **As pegadinhas**, que aparecem cedo:
 
@@ -258,15 +263,36 @@ O padrão que funciona bem:
 3. **reservar PK/FK para tabelas pequenas de referência**, onde a garantia
    declarativa vale o custo.
 
+## Chaves sequenciais (`SEQUENCE`): as restrições (exemplos 23 e 28)
+
+`CREATE SEQUENCE seq` + `coluna DEFAULT nextval('seq')` é o único idioma de
+chave gerada pelo banco (não há `IDENTITY`/`SERIAL`/`AUTO_INCREMENT`). Ele
+funciona, mas com restrições que não existem no Postgres — todas medidas no
+DuckDB 1.5.5, no exemplo 28 e em `tests/test_new_closing_date_routine.py`:
+
+| Você quer | O que o DuckDB faz | Faça assim |
+| --- | --- | --- |
+| **reposicionar** a sequence (`setval()`, `ALTER SEQUENCE ... RESTART`) | não existem: `CatalogException` / `NotImplementedException` | o `START WITH` é definido **só na criação**; para continuar a numeração de dados existentes, leia `max(id)` primeiro e crie a sequence com `START WITH max(id) + 1` |
+| **recriar** (`CREATE OR REPLACE SEQUENCE`) ou **apagar** (`DROP SEQUENCE`) uma sequence usada num `DEFAULT` | `DependencyException` quando tabela e sequence estão no mesmo catálogo; **entre catálogos** (tabela `TEMP`, sequence em `main`) a dependência não é rastreada: os dois comandos passam, e o `DROP` deixa o `DEFAULT` apontando para o nada (`CatalogException` no próximo `INSERT`) | crie a sequence antes da tabela e já com o `START WITH` certo; não use a lacuna entre catálogos como se fosse um `RESTART` |
+| inserir um **id explícito** numa coluna com `DEFAULT nextval` | a sequence **não avança**: o próximo `nextval` devolve o mesmo valor e, havendo PK, `ConstraintException` (`Duplicate key`) | ou todos os ids vêm da sequence, ou o `START WITH` fica acima do maior id gravado (o caso do staging do exemplo 28, que recebe a última partição com ids explícitos) |
+| desfazer um lote (`ROLLBACK`) | as linhas voltam; os valores consumidos, **não** — ficam buracos na numeração (como no Postgres). Entre conexões não há bloqueio nem reuso | aceite os buracos: são inofensivos |
+| ids **na ordem das linhas de origem** num `INSERT ... SELECT` | **sem garantia**: a carga é paralela por chunk/row group e os valores saem embaralhados (medido: 10 mil inversões num lote Arrow de 1M linhas em 16 batches; 90 mil em 5,6M linhas de um parquet com 36 row groups; um lote de um único batch sai ordenado apenas por não ser paralelizado) | ids determinísticos: `max_id + row_number() OVER (ORDER BY ...)`; e, no `RETURNING`, traga a natural key junto — a posição não diz nada (exemplo 23) |
+| saber o **último valor usado** (`currval('seq')`) | só vale na sessão que chamou `nextval` (`SequenceException` antes disso); **numa sessão nova sobre um arquivo**, `currval` devolve o contador persistido — o *próximo* valor, ainda não usado — e `last_value` em `duckdb_sequences()` idem | o último id gravado é `max(id)` na tabela, não `currval` |
+| contar com o contador **depois de reabrir** o `.duckdb` | ele só é gravado junto com uma **transação de escrita**: um `nextval` num `SELECT` puro em auto-commit é **perdido** ao fechar — reabrindo, o mesmo valor é entregue de novo, e nem `CHECKPOINT`/`FORCE CHECKPOINT` salvam. Dentro de `BEGIN ... COMMIT`, ou numa transação com qualquer `INSERT` (mesmo em tabela `TEMP`), persiste | não use a sequence como autoridade de ids que vivem fora do banco (parquet): derive o `START WITH` dos dados a cada execução, como a rotina do exemplo 28 faz |
+| tipos, limites e opções | `nextval` devolve `BIGINT` (cast implícito para `INTEGER` no `DEFAULT`); `MAXVALUE` sem `CYCLE` estoura com `SequenceException`; `START WITH 0` exige `MINVALUE 0` (`ParserException`); há `INCREMENT BY`, `MINVALUE`, `MAXVALUE`, `CYCLE` e `CREATE TEMP SEQUENCE` | `duckdb_sequences()` mostra `start_value`, `last_value`, `increment_by`, `min_value`, `max_value`, `cycle`, `temporary` |
+| **custo** em bulk load | `DEFAULT nextval` roda linha a linha, mas é barato perto de uma `PRIMARY KEY` (índice ART): no epílogo do exemplo 28 (1M linhas), staging com PK + `nextval` custou ~2,5× o mesmo staging sem PK, e `row_number()` ficou ~25% abaixo do `nextval` | em staging, dispense a PK e valide a unicidade em lote (`ANTI JOIN`/`count(*)`) |
+
 ## Rotina de nova data-base: DataFrame → staging → partição parquet (exemplo 28)
 
 O exemplo 28 junta as peças acima numa rotina de ETL completa sobre uma base
 contábil fictícia particionada por data de fechamento
 (`cad_lancamentos/data_base_str=yyyy-mm-dd/`): `.duckdb` vazio → DDL → carga da
 base atual (dimensão inteira, fatos como **view**, só a última partição num
-`CREATE TEMP TABLE` de staging) → bulk insert de um DataFrame pandas → validações
-→ `COPY` da partição nova de volta para a base de origem. Cinco fatos medidos
-definem a forma da rotina:
+`CREATE TEMP TABLE` de staging) → o mês novo derivado do staging em pandas
+(backend pyarrow) e devolvido por bulk insert → validações → `COPY` da partição
+nova de volta para a base de origem. A regra de derivação do exemplo é fictícia
+(saldos de abertura + recorrentes); o caminho do dado é o real. Cinco fatos
+medidos definem a forma da rotina:
 
 **A sequence nasce com o `START WITH` certo, ou não nasce.** Não há `setval()`
 nem `ALTER SEQUENCE ... RESTART` (`NotImplementedException`), e `CREATE OR
@@ -317,6 +343,46 @@ A recarga idempotente da rotina é remover a pasta da partição-alvo e gravar c
 sobre o glob não precisa de ajuste — no `SELECT` seguinte ela já lista a
 partição nova —, e o `.duckdb` que sobra guarda só o catálogo (a dimensão e o
 texto da view, com o caminho absoluto); os fatos continuam nos parquet.
+
+### O que custa cada peça — e a versão enxuta
+
+O epílogo do exemplo mede seis mecânicas para levar o mesmo lote Arrow de 1M
+de linhas (16 batches, como um DataFrame montado por `concat`) até a partição
+parquet, cada uma numa conexão nova e terminando no mesmo `COPY`:
+
+| Mecânica | Tempo | ids fora da ordem do lote |
+| --- | --- | --- |
+| staging com `PRIMARY KEY` + `DEFAULT nextval`, `.duckdb` em arquivo (a rotina como especificada) | 243ms | ~10.500 |
+| idem, conexão em memória | 243ms | ~10.600 |
+| staging sem PK + `DEFAULT nextval` | 92ms | ~10.800 |
+| staging sem PK + `row_number() OVER ()` | 68ms | 0 |
+| sem staging: `row_number() OVER ()` dentro do `COPY` | 91ms | — |
+| sem staging: id já vem no lote, `COPY` direto do Arrow | 22ms | — |
+
+Três conclusões, que valem para qualquer rotina de carga no DuckDB:
+
+1. **A `PRIMARY KEY` do staging é o custo dominante** (o índice ART é
+   construído linha a linha) — não a sequence, não o staging e não o arquivo
+   `.duckdb`: o staging é `TEMP` e não toca o arquivo (as duas primeiras
+   linhas empatam). Em staging, dispense a PK e valide a unicidade em lote,
+   que a rotina já faz.
+2. **`nextval` não segue a ordem do lote** numa carga paralela (a coluna da
+   direita), e custa um pouco mais que `row_number()`. Para ids determinísticos
+   e reproduzíveis: `max_id + row_number() OVER (ORDER BY ...)`.
+3. **O caminho mais curto não tem staging**: com o id já calculado no lote, o
+   `COPY` lê os batches do Arrow em paralelo e grava a partição direto — 10×
+   mais rápido que a rotina. Uma window function dentro do `COPY` desfaz o
+   ganho (sem `PARTITION BY`, ela roda numa thread só).
+
+A rotina do exemplo mantém staging, `SEQUENCE` e transação porque é isso que
+ela ensina — e porque, num fechamento mensal, 245ms por milhão de linhas não é
+o gargalo. A versão enxuta da mesma rotina, para quando o volume importar:
+conexão em memória, `dom_veiculos` e `cad_lancamentos` como views sobre o
+parquet, o lote validado por `ANTI JOIN` direto contra a view (sem inserir
+nada), ids atribuídos no próprio lote (`max(id)` da última partição +
+posição) e um único `COPY ... PARTITION_BY` do Arrow para a partição nova —
+gravada numa pasta temporária e renomeada no fim, já que o `COPY` não é
+atômico e a transação do DuckDB não cobre arquivos parquet.
 
 ## Streaming em lotes: RecordBatch entrando e saindo (exemplos 15 e 24)
 

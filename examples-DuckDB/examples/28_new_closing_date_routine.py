@@ -24,11 +24,15 @@ a partição nova **no mesmo lugar da base de origem**. Seis passos:
 3. **Carga da base atual** — `dom_veiculos` entra inteira (`INSERT ... BY
    NAME`); `cad_lancamentos` vira uma **VIEW** sobre o glob (zero cópia); só a
    partição da última `data_base_str` é materializada em `CREATE TEMP TABLE
-   stage_cad_lancamentos_mes` — o `EXPLAIN` mostra o pruning abrindo 1 arquivo
-   de 12.
-4. **Bulk insert do lote novo** — um DataFrame pandas (backend pyarrow) entra
-   com `INSERT INTO stage_cad_lancamentos_mes BY NAME SELECT * FROM lote`. O
-   DataFrame **não traz** `id_lancamento`: a chave vem do `DEFAULT
+   stage_cad_lancamentos_mes` — é dela que o mês novo é derivado, e o
+   `EXPLAIN` mostra o pruning abrindo 1 arquivo de 12.
+4. **Bulk insert do lote novo, derivado do staging** — o mês fechado sai do
+   staging como DataFrame pandas (backend pyarrow, via Arrow, sem passar por
+   objetos Python), a regra de derivação roda em Python e o resultado volta
+   com `INSERT INTO stage_cad_lancamentos_mes BY NAME SELECT * FROM lote`. A
+   regra aqui é fictícia e simples (saldos de abertura + recorrentes); na
+   vida real é a lógica de negócio da rotina — o caminho do dado é o mesmo.
+   O DataFrame **não traz** `id_lancamento`: a chave vem do `DEFAULT
    nextval('seq_id_lancamento')`, gerada no lado do "servidor".
 5. **Validações de integridade** — todo `id_veiculo` existe em `dom_veiculos`?
    (`ANTI JOIN`), as datas caem no mês da data-base?, os ids não colidem com a
@@ -46,7 +50,12 @@ O que a rotina ensina de DuckDB (tudo verificado na execução):
     `DEFAULT` (`DependencyException`). Logo a sequence precisa nascer com o
     `START WITH` certo — `max(id_lancamento) + 1` — e esse número só existe
     depois de enxergar a base. É por isso que a sequence e o staging (a única
-    tabela que a usa) são criados no passo 3, e não no passo 2.
+    tabela que a usa) são criados no passo 3, e não no passo 2. Outras duas
+    restrições pesam na rotina: numa carga paralela os valores de `nextval`
+    **não seguem a ordem do lote**, e um `nextval` consumido num `SELECT` puro
+    **nem é persistido** no `.duckdb` — a sequence não serve de autoridade
+    para ids gravados em parquet; o dado é. (A tabela completa de restrições
+    está no README, em "Chaves sequenciais".)
 
 `INSERT INTO tabela BY NAME SELECT ...`
     Casa as colunas **pelo nome**, não pela posição; as colunas ausentes no
@@ -73,16 +82,20 @@ Sequence não é transacional
     receita idempotente da rotina: remover a pasta da partição e gravar com
     `OVERWRITE_OR_IGNORE` (necessário só porque a pasta-raiz já existe).
 
+O epílogo mede o que cada peça custa num lote de 1M de linhas (staging com e
+sem PRIMARY KEY, `nextval` vs `row_number()`, staging vs `COPY` direto do
+Arrow) e conta quantos ids saem fora da ordem do lote em cada variante.
+
 Rode com: `uv run examples/28_new_closing_date_routine.py`
 """
 
 from __future__ import annotations
 
 import datetime as dt
-import random
 import re
 import shutil
-from decimal import Decimal
+import time
+from pathlib import Path
 
 import duckdb
 import pandas as pd
@@ -107,7 +120,6 @@ VEICULOS = [
 ]
 MESES_NA_BASE = 12  # 2024-01-31 .. 2024-12-31
 LANCAMENTOS_POR_MES = 4_000
-LANCAMENTOS_NOVOS = 3_000
 
 
 def prepara_base_ficticia() -> None:
@@ -155,41 +167,50 @@ def arquivos_abertos(con: duckdb.DuckDBPyConnection, sql: str, params: list | No
     return achado.group(1) if achado else "?"
 
 
-def monta_lote(con: duckdb.DuckDBPyConnection, ultima: str, nova: str) -> pd.DataFrame:
-    """Os lançamentos da próxima data-base, como DataFrame pandas com backend pyarrow.
+def carrega_mes_anterior(con: duckdb.DuckDBPyConnection, ultima: str) -> pd.DataFrame:
+    """O mês fechado sai do staging como DataFrame pandas com backend pyarrow (via Arrow, sem cópia por linha)."""
+    return (
+        con.execute(
+            "SELECT * FROM stage_cad_lancamentos_mes WHERE data_base_str = ? ORDER BY id_lancamento", [ultima]
+        )
+        .to_arrow_table()
+        .to_pandas(types_mapper=pd.ArrowDtype)
+    )
 
-    Duas origens, concatenadas: (a) as provisões recorrentes — os lançamentos
-    feitos no dia do fechamento anterior se repetem no fechamento novo (saem
-    do staging via Arrow, sem passar por objetos Python); (b) os lançamentos
-    novos do mês, aqui sorteados, na prática vindos do sistema de origem.
-    O DataFrame NÃO traz `id_lancamento`: a chave é do banco (SEQUENCE).
+
+def deriva_lote(anterior: pd.DataFrame, ultima: str, nova: str) -> pd.DataFrame:
+    """Deriva os lançamentos da data-base nova a partir dos da anterior — em pandas.
+
+    É aqui que mora a lógica de negócio da rotina. A regra abaixo é um
+    substituto fictício e simples; o que este exemplo exercita é o caminho do
+    dado, que é o real: o mês anterior chega do staging como DataFrame
+    (backend pyarrow), a derivação roda em Python e o resultado volta ao
+    staging por bulk insert.
+
+    1. **Saldo de abertura** — o total do mês anterior por veículo entra como
+       um lançamento no 1º dia do mês novo (`groupby` + `sum`; a soma preserva
+       o `decimal128(12, 2)`, sem passar por float).
+    2. **Recorrentes** — os lançamentos feitos no dia do fechamento anterior
+       (as provisões) se repetem no dia do fechamento novo.
+
+    O resultado NÃO traz `id_lancamento`: a chave é do banco (SEQUENCE).
     """
-    recorrentes = con.execute(
-        """
-        SELECT id_veiculo, valor FROM stage_cad_lancamentos_mes
-        WHERE data_lancamento = CAST(? AS DATE) ORDER BY id_lancamento
-        """,
-        [ultima],
-    ).to_arrow_table().to_pandas(types_mapper=pd.ArrowDtype)
+    fechamento_anterior = dt.date.fromisoformat(ultima)
     fechamento = dt.date.fromisoformat(nova)
-    recorrentes["data_lancamento"] = pd.Series([fechamento] * len(recorrentes), dtype=pd.ArrowDtype(pa.date32()))
-    recorrentes["data_base_str"] = pd.Series([nova] * len(recorrentes), dtype=pd.ArrowDtype(pa.string()))
+    tipos = {"data_lancamento": pd.ArrowDtype(pa.date32()), "data_base_str": pd.ArrowDtype(pa.string())}
 
-    sorteio = random.Random(nova)  # seed = a data-base: o lote é reproduzível
-    n = LANCAMENTOS_NOVOS
-    novos = pa.table(
-        {
-            "data_lancamento": pa.array(
-                [fechamento.replace(day=sorteio.randint(1, fechamento.day)) for _ in range(n)], pa.date32()
-            ),
-            "id_veiculo": pa.array([sorteio.randint(1, len(VEICULOS)) for _ in range(n)], pa.int32()),
-            "valor": pa.array(
-                [Decimal(sorteio.randint(-500_000, 1_500_000)) / 100 for _ in range(n)], pa.decimal128(12, 2)
-            ),
-            "data_base_str": pa.array([nova] * n, pa.string()),
-        }
-    ).to_pandas(types_mapper=pd.ArrowDtype)
-    return pd.concat([recorrentes, novos], ignore_index=True)
+    abertura = (
+        anterior.groupby("id_veiculo", as_index=False)["valor"]
+        .sum()
+        .assign(data_lancamento=fechamento.replace(day=1), data_base_str=nova)
+        .astype(tipos)
+    )
+    recorrentes = (
+        anterior.loc[anterior["data_lancamento"] == fechamento_anterior, ["id_veiculo", "valor"]]
+        .assign(data_lancamento=fechamento, data_base_str=nova)
+        .astype(tipos)
+    )
+    return pd.concat([abertura, recorrentes], ignore_index=True)
 
 
 def valida_integridade(con: duckdb.DuckDBPyConnection, nova: str) -> dict[str, str | None]:
@@ -232,6 +253,84 @@ def valida_integridade(con: duckdb.DuckDBPyConnection, nova: str) -> dict[str, s
         "data_lancamento dentro do mês da data-base": f"{fora_do_mes} linha(s) fora do mês" if fora_do_mes else None,
         "id_lancamento inédito na base histórica": f"{colisoes} id(s) já usados" if colisoes else None,
     }
+
+
+LINHAS_MEDICAO = 1_000_000
+
+
+def lote_para_medicao(n: int) -> pa.Table:
+    """Um lote sintético de `n` linhas, com a coluna `ordem` (1..n) para conferir a ordem dos ids.
+
+    O lote sai em batches de 65.536 linhas — a forma de um DataFrame montado por
+    `concat` ou lido de arquivos. Importa para a medição: o DuckDB lê os batches
+    em paralelo, e um lote de um único batch sairia ordenado só por não ser
+    paralelizado.
+    """
+    tabela = duckdb.connect().execute(
+        f"""
+        SELECT CAST(i + 1 AS INTEGER) AS ordem,
+               DATE '2025-01-01' + CAST(hash(i) % 31 AS INTEGER) AS data_lancamento,
+               CAST(1 + hash(i) % {len(VEICULOS)} AS INTEGER) AS id_veiculo,
+               CAST(CAST(CAST((hash(i) // 6) % 2000001 AS BIGINT) - 500000 AS DECIMAL(14, 0))
+                    * 0.01::DECIMAL(3, 2) AS DECIMAL(12, 2)) AS valor,
+               '2025-01-31' AS data_base_str
+        FROM range({n}) t(i)
+        """
+    ).to_arrow_table()
+    return pa.Table.from_batches(tabela.to_batches(max_chunksize=65_536))
+
+
+def mede_variantes(lote_grande: pa.Table, destino: Path) -> None:
+    """Quatro mecânicas para levar o mesmo lote até a partição parquet (melhor de 3 execuções).
+
+    Cada variante parte de uma conexão nova em memória e termina com o mesmo
+    `COPY ... PARTITION_BY`. Além do tempo, conta quantas vezes o id atribuído
+    "volta" quando se percorre o lote na ordem original — zero significa que
+    os ids seguem a ordem das linhas do lote.
+    """
+    ddl = (
+        "CREATE TEMP TABLE medida (id_lancamento INTEGER {pk} {default}, ordem INTEGER, data_lancamento DATE, "
+        "id_veiculo INTEGER, valor DECIMAL(12, 2), data_base_str VARCHAR)"
+    )
+    copia = (
+        "COPY (SELECT * EXCLUDE (ordem) FROM {fonte}) TO '{destino}' "
+        "(FORMAT parquet, PARTITION_BY (data_base_str), OVERWRITE_OR_IGNORE)"
+    )
+    variantes = {
+        "staging com PRIMARY KEY + DEFAULT nextval, .duckdb em arquivo (a rotina)": (
+            "PRIMARY KEY", "DEFAULT nextval('seq_medida')", "*",
+        ),
+        "staging com PRIMARY KEY + DEFAULT nextval, em memória": ("PRIMARY KEY", "DEFAULT nextval('seq_medida')", "*"),
+        "staging sem PK + DEFAULT nextval": ("", "DEFAULT nextval('seq_medida')", "*"),
+        "staging sem PK + row_number() OVER ()": ("", "", "row_number() OVER () AS id_lancamento, *"),
+        "sem staging: row_number() OVER () dentro do COPY": "(SELECT row_number() OVER () AS id_lancamento, * FROM lote_grande)",
+        "sem staging: id já vem no lote, COPY direto do Arrow": "(SELECT ordem AS id_lancamento, * FROM lote_grande)",
+    }
+    arquivo = destino.parent / "medicao.duckdb"
+    for rotulo, receita in variantes.items():
+        tempos, fora_de_ordem = [], 0
+        for _ in range(3):
+            arquivo.unlink(missing_ok=True)
+            con = duckdb.connect(str(arquivo)) if "arquivo" in rotulo else duckdb.connect()
+            con.execute("CREATE SEQUENCE seq_medida START WITH 1")
+            inicio = time.perf_counter()
+            if isinstance(receita, str):  # sem staging: o COPY lê o Arrow diretamente
+                con.execute(copia.format(fonte=receita, destino=destino))
+            else:
+                pk, default, projecao = receita
+                con.execute(ddl.format(pk=pk, default=default))
+                con.execute(f"INSERT INTO medida BY NAME SELECT {projecao} FROM lote_grande")
+                con.execute(copia.format(fonte="medida", destino=destino))
+            tempos.append(time.perf_counter() - inicio)
+            if not isinstance(receita, str):
+                (fora_de_ordem,) = con.execute(
+                    "SELECT count(*) FILTER (WHERE ordem < anterior) FROM "
+                    "(SELECT ordem, lag(ordem) OVER (ORDER BY id_lancamento) AS anterior FROM medida)"
+                ).fetchone()
+            con.close()
+        ordem = f"ids fora da ordem do lote: {fora_de_ordem:,}" if not isinstance(receita, str) else ""
+        print(f"{rotulo:72s} {min(tempos) * 1000:5.0f}ms   {ordem}")
+    arquivo.unlink(missing_ok=True)
 
 
 def imprime_validacao(resultado: dict[str, str | None]) -> bool:
@@ -337,13 +436,17 @@ if __name__ == "__main__":
         """
     ).show()
 
-    section("4) Bulk insert: DataFrame pandas (backend pyarrow) -> staging, id gerado pela SEQUENCE")
+    section("4) Bulk insert: o mês novo derivado do staging em pandas, id gerado pela SEQUENCE")
     (nova,) = con.execute(
         "SELECT strftime(last_day(CAST(? AS DATE) + INTERVAL 1 MONTH), '%Y-%m-%d')", [ultima]
     ).fetchone()
     print(f"próxima data-base: {ultima} -> {nova}")
-    lote = monta_lote(con, ultima, nova)
-    print(f"lote: {len(lote):,} linhas, sem id_lancamento; dtypes:")
+    anterior = carrega_mes_anterior(con, ultima)
+    print(f"mês anterior, lido do staging: {len(anterior):,} linhas num {type(anterior).__name__} (backend pyarrow)")
+    lote = deriva_lote(anterior, ultima, nova)
+    n_abertura = anterior["id_veiculo"].nunique()
+    print(f"lote derivado: {len(lote):,} linhas = {n_abertura} saldos de abertura + {len(lote) - n_abertura} recorrentes;")
+    print("sem id_lancamento, e com os dtypes que saíram do staging:")
     print("  " + lote.dtypes.to_string().replace("\n", "\n  "))
     print("\nSELECT * posicional não serve — o DataFrame tem 4 colunas, a tabela 5:")
     try:
@@ -365,15 +468,9 @@ if __name__ == "__main__":
     con.execute("COMMIT" if aprovado else "ROLLBACK")
     print(f"-> {'COMMIT' if aprovado else 'ROLLBACK'}")
 
-    section("O que a validação pega: lote com veículo inexistente é revertido inteiro")
-    lote_ruim = pa.table(
-        {
-            "data_lancamento": pa.array([dt.date.fromisoformat(nova)] * 3, pa.date32()),
-            "id_veiculo": pa.array([1, 99, 2], pa.int32()),  # 99 não existe em dom_veiculos
-            "valor": pa.array([Decimal("10.00")] * 3, pa.decimal128(12, 2)),
-            "data_base_str": pa.array([nova] * 3, pa.string()),
-        }
-    ).to_pandas(types_mapper=pd.ArrowDtype)
+    section("O que a validação pega: um defeito na derivação é revertido inteiro")
+    # simula um bug na regra de derivação: o veículo 99 não existe em dom_veiculos
+    lote_ruim = lote.head(3).assign(id_veiculo=pd.Series([1, 99, 2], dtype=pd.ArrowDtype(pa.int32())))
     (antes,) = con.execute("SELECT count(*) FROM stage_cad_lancamentos_mes").fetchone()
     con.execute("BEGIN")
     con.execute("INSERT INTO stage_cad_lancamentos_mes BY NAME SELECT * FROM lote_ruim")
@@ -435,3 +532,15 @@ if __name__ == "__main__":
     print("continuam nos parquet, e a view (com o caminho absoluto no seu texto) lista")
     print(f"{n_datas} datas-base. A próxima execução da rotina partiria de {nova}.")
     con.close()
+
+    section(f"Epílogo: o que custa cada peça da rotina — lote de {LINHAS_MEDICAO:,} linhas")
+    lote_grande = lote_para_medicao(LINHAS_MEDICAO)
+    mede_variantes(lote_grande, WORK_DIR / "medicao")
+    shutil.rmtree(WORK_DIR / "medicao", ignore_errors=True)
+    print("\nO custo dominante da rotina é a PRIMARY KEY do staging (o índice ART é construído")
+    print("linha a linha) — não a sequence nem o arquivo .duckdb (o staging é TEMP e não toca")
+    print("o arquivo). nextval custa pouco mais que row_number(), mas numa carga paralela os")
+    print("ids saem fora da ordem do lote; para ids determinísticos, max_id + row_number()")
+    print("OVER (ORDER BY ...). O caminho mais curto é não ter staging: com o id já no lote, o")
+    print("COPY lê os batches do Arrow em paralelo e grava a partição direto — mas uma window")
+    print("function dentro do COPY desfaz o ganho (sem PARTITION BY, ela roda numa thread só).")
