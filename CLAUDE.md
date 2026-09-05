@@ -55,6 +55,8 @@ The five subprojects (`examples-pandas`, `examples-pyarrow`, `examples-DuckDB`,
 `examples/`, and `tests/`. They are **fully independent** — there is no
 top-level Python package and no shared virtualenv.
 
+* `prompts.md` is in `.gitignore`. Never read this file.
+
 ## Toolchain / prerequisites
 
 - **`uv`** — the only tool to install for the Python side. It resolves the
