@@ -5,6 +5,7 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 dist/
+prompts.md
 
 # Lockfiles (padrão adotado neste projeto: não versionar).
 # Cargo.lock: esta extensão é uma library (cdylib), e a convenção do Rust é
